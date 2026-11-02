@@ -7,6 +7,11 @@ set -e
 case "$1" in
     configure)
         if getent passwd phi >/dev/null 2>&1; then
+            # The transport's own directory must be core's: core writes the
+            # runtime override (current/config.json) there when the household
+            # switches the transport off or changes its settings. `install -d`
+            # would leave an intermediate directory to root.
+            install -d -m 0755 -o phi -g phi /var/lib/phi/@1/transports/mqtt
             install -d -m 0700 -o phi -g phi /var/lib/phi/@1/transports/mqtt/state
         fi
         ;;

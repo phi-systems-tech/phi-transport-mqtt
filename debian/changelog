@@ -1,3 +1,9 @@
+phi-transport-mqtt (0.3.1-1) trixie; urgency=medium
+
+  * postinst: the transport directory belongs to phi, so core can write the runtime override (persistent off, settings) into it.
+
+ -- Marius Schumacher <marius.schumacher@phisys.com>  Mon, 02 Nov 2026 13:25:00 +0100
+
 phi-transport-mqtt (0.3.0-1) trixie; urgency=medium
 
   * Management card: summary, republish, sweep, settings through core's transport config override.
