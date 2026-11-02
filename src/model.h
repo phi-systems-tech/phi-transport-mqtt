@@ -25,12 +25,48 @@ using Json = nlohmann::json;
 // out here because the wire is the contract and this package does not build
 // against the SDK.
 namespace kind {
+inline constexpr int PowerOnOff = 1;
 inline constexpr int ButtonEvent = 2;
+inline constexpr int Brightness = 10;
+inline constexpr int ColorTemperature = 11;
+inline constexpr int ColorRGB = 12;
+inline constexpr int Volume = 30;
+// 31..40: Mute, HdmiInput, PlayPause and the Media* readings - the media player set (phase (d)).
+inline constexpr int Mute = 31;
+inline constexpr int MediaPlayedOn = 40;
+inline constexpr int Temperature = 50;
+inline constexpr int Humidity = 51;
+inline constexpr int Illuminance = 52;
+inline constexpr int Motion = 53;
+inline constexpr int Battery = 54;
+inline constexpr int CO2 = 55;
+inline constexpr int ConnectivityStatus = 57;
+inline constexpr int SignalStrength = 59;
+inline constexpr int Power = 60;
+inline constexpr int Voltage = 61;
+inline constexpr int Current = 62;
+inline constexpr int Energy = 63;
+inline constexpr int LinkQuality = 64;
+inline constexpr int Contact = 66;
+inline constexpr int Tamper = 67;
 inline constexpr int SceneTrigger = 300;
-inline constexpr int Message = 460;
+inline constexpr int VideoStream = 420;
+inline constexpr int Snapshot = 421;
 inline constexpr int DoorbellRing = 422;
 inline constexpr int ObjectDetected = 423;
+// 424..426: PtzMove, PtzPreset, NightVision - camera controls (phase (d)).
+inline constexpr int PtzMove = 424;
+inline constexpr int NightVision = 426;
+inline constexpr int Presence = 440;
+inline constexpr int Message = 460;
+inline constexpr int RemoteKey = 480;
 } // namespace kind
+
+// DeviceClass numbers (v1/types.h).
+namespace deviceClass {
+inline constexpr int Light = 1;
+inline constexpr int Plug = 5;
+} // namespace deviceClass
 
 namespace dataType {
 inline constexpr int Unknown = 0;
@@ -89,6 +125,8 @@ struct Device {
     int adapterId = 0;
     std::string externalId;
     std::string name;
+    /// What the device says about itself; any of them may be empty.
+    std::string manufacturer, model, firmware;
     int deviceClass = 0;
     std::string className;
     int userRoomId = 0, adapterRoomId = 0;

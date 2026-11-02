@@ -133,6 +133,9 @@ Device deviceFromJson(const Json &device, const Json &channels)
     d.adapterId = intOf(device, "adapterId");
     d.externalId = strOf(device, "externalId");
     d.name = strOf(device, "name");
+    d.manufacturer = strOf(device, "manufacturer");
+    d.model = strOf(device, "model");
+    d.firmware = strOf(device, "firmware");
     d.deviceClass = intOf(device, "deviceClass");
     d.className = strOf(device, "deviceClassName");
     d.userRoomId = intOf(device, "userRoomId");

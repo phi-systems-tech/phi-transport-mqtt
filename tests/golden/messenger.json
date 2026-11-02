@@ -1,0 +1,34 @@
+{
+  "availability": [
+    {
+      "payload_available": "online",
+      "payload_not_available": "offline",
+      "topic": "phi/bridge/state"
+    },
+    {
+      "payload_available": "online",
+      "payload_not_available": "offline",
+      "topic": "phi/device/15/availability"
+    }
+  ],
+  "availability_mode": "all",
+  "cmps": {
+    "mail": {
+      "command_topic": "phi/device/15/mail/set",
+      "name": "Message",
+      "p": "notify",
+      "unique_id": "phi_pi5_1_15_mail"
+    }
+  },
+  "dev": {
+    "ids": [
+      "phi_pi5_1_15"
+    ],
+    "name": "Marius (mail)"
+  },
+  "o": {
+    "name": "phi",
+    "sw": "9.9.9",
+    "url": "https://github.com/phi-systems-tech/phi-transport-mqtt"
+  }
+}

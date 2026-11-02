@@ -1,0 +1,61 @@
+{
+  "availability": [
+    {
+      "payload_available": "online",
+      "payload_not_available": "offline",
+      "topic": "phi/bridge/state"
+    },
+    {
+      "payload_available": "online",
+      "payload_not_available": "offline",
+      "topic": "phi/device/11/availability"
+    }
+  ],
+  "availability_mode": "all",
+  "cmps": {
+    "energy": {
+      "device_class": "energy",
+      "name": "Energy",
+      "p": "sensor",
+      "state_class": "total_increasing",
+      "state_topic": "phi/device/11/energy",
+      "unique_id": "phi_pi5_1_11_energy",
+      "unit_of_measurement": "kWh"
+    },
+    "power": {
+      "device_class": "power",
+      "name": "Power",
+      "p": "sensor",
+      "state_class": "measurement",
+      "state_topic": "phi/device/11/power",
+      "unique_id": "phi_pi5_1_11_power",
+      "unit_of_measurement": "W"
+    },
+    "state": {
+      "command_topic": "phi/device/11/state/set",
+      "device_class": "outlet",
+      "name": null,
+      "p": "switch",
+      "payload_off": "false",
+      "payload_on": "true",
+      "state_off": "false",
+      "state_on": "true",
+      "state_topic": "phi/device/11/state",
+      "unique_id": "phi_pi5_1_11_state"
+    }
+  },
+  "dev": {
+    "ids": [
+      "phi_pi5_1_11"
+    ],
+    "mdl": "Smart Socket",
+    "mf": "Hombli",
+    "name": "Coffee plug",
+    "sa": "Kitchen"
+  },
+  "o": {
+    "name": "phi",
+    "sw": "9.9.9",
+    "url": "https://github.com/phi-systems-tech/phi-transport-mqtt"
+  }
+}

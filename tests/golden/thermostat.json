@@ -1,0 +1,62 @@
+{
+  "availability": [
+    {
+      "payload_available": "online",
+      "payload_not_available": "offline",
+      "topic": "phi/bridge/state"
+    },
+    {
+      "payload_available": "online",
+      "payload_not_available": "offline",
+      "topic": "phi/device/16/availability"
+    }
+  ],
+  "availability_mode": "all",
+  "cmps": {
+    "fault": {
+      "name": "Fault",
+      "p": "sensor",
+      "state_topic": "phi/device/16/fault",
+      "unique_id": "phi_pi5_1_16_fault",
+      "value_template": "{{ value_json | join(', ') if value_json is iterable and value_json is not string else value_json }}"
+    },
+    "mode": {
+      "name": "Mode",
+      "p": "sensor",
+      "state_topic": "phi/device/16/mode",
+      "unique_id": "phi_pi5_1_16_mode",
+      "value_template": "{{ value_json }}"
+    },
+    "setpoint": {
+      "command_topic": "phi/device/16/setpoint/set",
+      "max": 30.0,
+      "min": 5.0,
+      "name": "Target",
+      "p": "number",
+      "state_topic": "phi/device/16/setpoint",
+      "step": 0.5,
+      "unique_id": "phi_pi5_1_16_setpoint",
+      "unit_of_measurement": "°C"
+    },
+    "temperature": {
+      "device_class": "temperature",
+      "name": "Temperature",
+      "p": "sensor",
+      "state_class": "measurement",
+      "state_topic": "phi/device/16/temperature",
+      "unique_id": "phi_pi5_1_16_temperature",
+      "unit_of_measurement": "°C"
+    }
+  },
+  "dev": {
+    "ids": [
+      "phi_pi5_1_16"
+    ],
+    "name": "Bath thermostat"
+  },
+  "o": {
+    "name": "phi",
+    "sw": "9.9.9",
+    "url": "https://github.com/phi-systems-tech/phi-transport-mqtt"
+  }
+}

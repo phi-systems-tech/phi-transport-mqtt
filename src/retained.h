@@ -36,6 +36,12 @@ public:
     std::vector<Message> replayAll();
     void setOffline();
 
+    /// The payloads of every group whose name starts with `groupPrefix`, as they stand (the discovery
+    /// is said again when Home Assistant comes online, the rest is untouched).
+    std::vector<Message> messagesOf(const std::string &groupPrefix) const;
+    /// What the ledger holds for `topic` in `group`; empty when nothing.
+    std::string payloadOf(const std::string &group, const std::string &topic) const;
+
     /// Whether `topic` is one this ledger owns right now.
     bool has(const std::string &topic) const;
     std::size_t topicCount() const;

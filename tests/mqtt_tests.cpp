@@ -429,7 +429,8 @@ void testCommandParsing()
     CHECK(!parseChannelPayload(fault, "OverCurrent").ok);
     // A composite value is an object.
     CHECK(parseChannelPayload(mail, "{\"subject\":\"Hi\",\"body\":\"There\"}").ok);
-    CHECK(!parseChannelPayload(mail, "Hi there").ok);
+    // ... except a Message, which takes the bare text as its body (a Home Assistant notify entity sends nothing else).
+    CHECK(parseChannelPayload(mail, "Hi there").value == (Json{{"body", "Hi there"}}));
 
     // device/<id>/set keeps the sender's order.
     std::vector<std::pair<std::string, Json>> items;

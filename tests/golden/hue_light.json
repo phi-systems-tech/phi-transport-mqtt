@@ -1,0 +1,61 @@
+{
+  "availability": [
+    {
+      "payload_available": "online",
+      "payload_not_available": "offline",
+      "topic": "phi/bridge/state"
+    },
+    {
+      "payload_available": "online",
+      "payload_not_available": "offline",
+      "topic": "phi/device/10/availability"
+    }
+  ],
+  "availability_mode": "all",
+  "cmps": {
+    "power": {
+      "brightness_command_topic": "phi/device/10/brightness/set",
+      "brightness_scale": 100,
+      "brightness_state_topic": "phi/device/10/brightness",
+      "color_temp_command_topic": "phi/device/10/ct/set",
+      "color_temp_state_topic": "phi/device/10/ct",
+      "command_topic": "phi/device/10/power/set",
+      "max_kelvin": 6536,
+      "min_kelvin": 2000,
+      "name": null,
+      "p": "light",
+      "payload_off": "false",
+      "payload_on": "true",
+      "rgb_command_template": "{\"r\": {{ (red / 255) | round(4) }}, \"g\": {{ (green / 255) | round(4) }}, \"b\": {{ (blue / 255) | round(4) }}}",
+      "rgb_command_topic": "phi/device/10/color/set",
+      "rgb_state_topic": "phi/device/10/color",
+      "rgb_value_template": "{{ (value_json.r * 255) | round(0) | int }},{{ (value_json.g * 255) | round(0) | int }},{{ (value_json.b * 255) | round(0) | int }}",
+      "state_topic": "phi/device/10/power",
+      "unique_id": "phi_pi5_1_10_power"
+    },
+    "reachable": {
+      "entity_category": "diagnostic",
+      "name": "Link quality",
+      "p": "sensor",
+      "state_class": "measurement",
+      "state_topic": "phi/device/10/reachable",
+      "unique_id": "phi_pi5_1_10_reachable",
+      "unit_of_measurement": "%"
+    }
+  },
+  "dev": {
+    "ids": [
+      "phi_pi5_1_10"
+    ],
+    "mdl": "LCT015",
+    "mf": "Signify",
+    "name": "Kitchen light",
+    "sa": "Kitchen",
+    "sw": "1.65.9"
+  },
+  "o": {
+    "name": "phi",
+    "sw": "9.9.9",
+    "url": "https://github.com/phi-systems-tech/phi-transport-mqtt"
+  }
+}

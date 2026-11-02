@@ -1,0 +1,49 @@
+{
+  "availability": [
+    {
+      "payload_available": "online",
+      "payload_not_available": "offline",
+      "topic": "phi/bridge/state"
+    },
+    {
+      "payload_available": "online",
+      "payload_not_available": "offline",
+      "topic": "phi/device/17/availability"
+    }
+  ],
+  "availability_mode": "all",
+  "cmps": {
+    "privacy": {
+      "command_topic": "phi/device/17/privacy/set",
+      "name": "Privacy mode",
+      "p": "switch",
+      "payload_off": "false",
+      "payload_on": "true",
+      "state_off": "false",
+      "state_on": "true",
+      "state_topic": "phi/device/17/privacy",
+      "unique_id": "phi_pi5_1_17_privacy"
+    },
+    "ring": {
+      "device_class": "doorbell",
+      "event_types": [
+        "ring"
+      ],
+      "name": "Ring",
+      "p": "event",
+      "state_topic": "phi/device/17/ring",
+      "unique_id": "phi_pi5_1_17_ring"
+    }
+  },
+  "dev": {
+    "ids": [
+      "phi_pi5_1_17"
+    ],
+    "name": "Front doorbell"
+  },
+  "o": {
+    "name": "phi",
+    "sw": "9.9.9",
+    "url": "https://github.com/phi-systems-tech/phi-transport-mqtt"
+  }
+}

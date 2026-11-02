@@ -1,0 +1,35 @@
+{
+  "availability": [
+    {
+      "payload_available": "online",
+      "payload_not_available": "offline",
+      "topic": "phi/bridge/state"
+    },
+    {
+      "payload_available": "online",
+      "payload_not_available": "offline",
+      "topic": "phi/device/14/availability"
+    }
+  ],
+  "availability_mode": "all",
+  "cmps": {
+    "power-key": {
+      "command_topic": "phi/device/14/power-key/set",
+      "name": "Power",
+      "p": "button",
+      "payload_press": "true",
+      "unique_id": "phi_pi5_1_14_power-key"
+    }
+  },
+  "dev": {
+    "ids": [
+      "phi_pi5_1_14"
+    ],
+    "name": "TV"
+  },
+  "o": {
+    "name": "phi",
+    "sw": "9.9.9",
+    "url": "https://github.com/phi-systems-tech/phi-transport-mqtt"
+  }
+}

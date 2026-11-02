@@ -1,0 +1,38 @@
+{
+  "availability": [
+    {
+      "payload_available": "online",
+      "payload_not_available": "offline",
+      "topic": "phi/bridge/state"
+    }
+  ],
+  "availability_mode": "all",
+  "cmps": {
+    "scene_20": {
+      "command_topic": "phi/scene/20/set",
+      "name": "Evening",
+      "p": "scene",
+      "payload_on": "ON",
+      "unique_id": "phi_pi5_1_scene_20"
+    },
+    "scene_21": {
+      "command_topic": "phi/scene/21/set",
+      "name": "Movie",
+      "p": "scene",
+      "payload_on": "ON",
+      "unique_id": "phi_pi5_1_scene_21"
+    }
+  },
+  "dev": {
+    "ids": [
+      "phi_pi5_1_scenes"
+    ],
+    "mf": "phi",
+    "name": "phi scenes"
+  },
+  "o": {
+    "name": "phi",
+    "sw": "9.9.9",
+    "url": "https://github.com/phi-systems-tech/phi-transport-mqtt"
+  }
+}

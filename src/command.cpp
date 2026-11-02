@@ -172,9 +172,22 @@ ParsedValue convert(const Channel &ch, const Json *parsed, std::string_view raw)
         if ((!parsed || parsed->is_string()) && parseInteger(text, &n) && n >= 0) return good(n);
         return bad("a flags channel takes its mask as a whole number");
     }
-    case dataType::Json:
+    case dataType::Json: {
         if (parsed && parsed->is_object()) return good(*parsed);
+        if (ch.kind == kind::Message) {
+            // Home Assistant's notify entity publishes the bare message text; that is a message with a body and nothing else.
+            std::string body;
+            if (parsed && parsed->is_string()) {
+                body = parsed->get<std::string>();
+            } else {
+                body = std::string(raw);
+                while (!body.empty() && (body.back() == '\n' || body.back() == '\r')) body.pop_back();
+            }
+            if (body.empty()) return bad("a message needs a body");
+            return good(Json{{"body", body}});
+        }
         return bad("this channel takes a JSON object");
+    }
     default:
         if (parsed) return good(*parsed);
         return good(text);

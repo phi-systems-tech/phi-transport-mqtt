@@ -1,0 +1,49 @@
+{
+  "availability": [
+    {
+      "payload_available": "online",
+      "payload_not_available": "offline",
+      "topic": "phi/bridge/state"
+    },
+    {
+      "payload_available": "online",
+      "payload_not_available": "offline",
+      "topic": "phi/device/12/availability"
+    }
+  ],
+  "availability_mode": "all",
+  "cmps": {
+    "battery": {
+      "device_class": "battery",
+      "entity_category": "diagnostic",
+      "name": "Battery",
+      "p": "sensor",
+      "state_class": "measurement",
+      "state_topic": "phi/device/12/battery",
+      "unique_id": "phi_pi5_1_12_battery",
+      "unit_of_measurement": "%"
+    },
+    "contact": {
+      "device_class": "opening",
+      "name": "Contact",
+      "p": "binary_sensor",
+      "payload_off": "false",
+      "payload_on": "true",
+      "state_topic": "phi/device/12/contact",
+      "unique_id": "phi_pi5_1_12_contact"
+    }
+  },
+  "dev": {
+    "ids": [
+      "phi_pi5_1_12"
+    ],
+    "mdl": "MCCGQ11LM",
+    "mf": "Aqara",
+    "name": "Front door"
+  },
+  "o": {
+    "name": "phi",
+    "sw": "9.9.9",
+    "url": "https://github.com/phi-systems-tech/phi-transport-mqtt"
+  }
+}

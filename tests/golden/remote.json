@@ -1,0 +1,74 @@
+{
+  "availability": [
+    {
+      "payload_available": "online",
+      "payload_not_available": "offline",
+      "topic": "phi/bridge/state"
+    },
+    {
+      "payload_available": "online",
+      "payload_not_available": "offline",
+      "topic": "phi/device/13/availability"
+    }
+  ],
+  "availability_mode": "all",
+  "cmps": {
+    "battery": {
+      "device_class": "battery",
+      "entity_category": "diagnostic",
+      "name": "Battery",
+      "p": "sensor",
+      "state_class": "measurement",
+      "state_topic": "phi/device/13/battery",
+      "unique_id": "phi_pi5_1_13_battery",
+      "unit_of_measurement": "%"
+    },
+    "button1": {
+      "device_class": "button",
+      "event_types": [
+        "initial_press",
+        "double_press",
+        "triple_press",
+        "quadruple_press",
+        "quintuple_press",
+        "long_press",
+        "long_press_release",
+        "short_press_release",
+        "repeat"
+      ],
+      "name": "Button 1",
+      "p": "event",
+      "state_topic": "phi/device/13/button1",
+      "unique_id": "phi_pi5_1_13_button1"
+    },
+    "button2": {
+      "device_class": "button",
+      "event_types": [
+        "initial_press",
+        "double_press",
+        "triple_press",
+        "quadruple_press",
+        "quintuple_press",
+        "long_press",
+        "long_press_release",
+        "short_press_release",
+        "repeat"
+      ],
+      "name": "Button 2",
+      "p": "event",
+      "state_topic": "phi/device/13/button2",
+      "unique_id": "phi_pi5_1_13_button2"
+    }
+  },
+  "dev": {
+    "ids": [
+      "phi_pi5_1_13"
+    ],
+    "name": "Hall remote"
+  },
+  "o": {
+    "name": "phi",
+    "sw": "9.9.9",
+    "url": "https://github.com/phi-systems-tech/phi-transport-mqtt"
+  }
+}

@@ -44,9 +44,11 @@ Json stateValue(const Channel &ch)
 std::string eventPayload(const Channel &ch, const Json &value, const std::string &valueName,
                          const Json &valueFlags, std::int64_t tsMs)
 {
-    (void)ch;
     Json out = Json::object();
-    if (!valueName.empty()) out["event_type"] = snakeCase(valueName);
+    // A ring is a ring whichever ButtonEventCode the adapter wrapped it in; the Home
+    // Assistant event entity of a doorbell declares this one type (discovery.cpp).
+    if (ch.kind == kind::DoorbellRing) out["event_type"] = "ring";
+    else if (!valueName.empty()) out["event_type"] = snakeCase(valueName);
     else if (value.is_string()) out["event_type"] = snakeCase(value.get<std::string>());
     else out["event_type"] = "event";
     if (value.is_number_integer()) out["code"] = value;

@@ -48,6 +48,25 @@ void Retained::setOffline()
     m_online = false;
 }
 
+std::vector<Message> Retained::messagesOf(const std::string &groupPrefix) const
+{
+    std::vector<Message> out;
+    if (!m_online) return out;
+    for (const auto &[group, topics] : m_groups) {
+        if (group.compare(0, groupPrefix.size(), groupPrefix) != 0) continue;
+        for (const auto &[topic, payload] : topics) out.push_back(Message{topic, payload, true});
+    }
+    return out;
+}
+
+std::string Retained::payloadOf(const std::string &group, const std::string &topic) const
+{
+    const auto g = m_groups.find(group);
+    if (g == m_groups.end()) return {};
+    const auto t = g->second.find(topic);
+    return t == g->second.end() ? std::string() : t->second;
+}
+
 bool Retained::has(const std::string &topic) const
 {
     for (const auto &[group, topics] : m_groups)

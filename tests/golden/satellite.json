@@ -1,0 +1,56 @@
+{
+  "availability": [
+    {
+      "payload_available": "online",
+      "payload_not_available": "offline",
+      "topic": "phi/bridge/state"
+    },
+    {
+      "payload_available": "online",
+      "payload_not_available": "offline",
+      "topic": "phi/device/18/availability"
+    }
+  ],
+  "availability_mode": "all",
+  "cmps": {
+    "say": {
+      "command_topic": "phi/device/18/say/set",
+      "name": "Announcement",
+      "p": "text",
+      "state_topic": "phi/device/18/say",
+      "unique_id": "phi_pi5_1_18_say",
+      "value_template": "{{ value_json }}"
+    },
+    "voice": {
+      "name": "Voice level",
+      "p": "sensor",
+      "state_class": "measurement",
+      "state_topic": "phi/device/18/voice",
+      "unique_id": "phi_pi5_1_18_voice",
+      "unit_of_measurement": "%"
+    },
+    "volume": {
+      "command_topic": "phi/device/18/volume/set",
+      "max": 100.0,
+      "min": 0.0,
+      "name": "Volume",
+      "p": "number",
+      "state_topic": "phi/device/18/volume",
+      "step": 5.0,
+      "unique_id": "phi_pi5_1_18_volume",
+      "unit_of_measurement": "%"
+    }
+  },
+  "dev": {
+    "ids": [
+      "phi_pi5_1_18"
+    ],
+    "name": "Kitchen satellite",
+    "sa": "Kitchen"
+  },
+  "o": {
+    "name": "phi",
+    "sw": "9.9.9",
+    "url": "https://github.com/phi-systems-tech/phi-transport-mqtt"
+  }
+}
