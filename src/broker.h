@@ -36,6 +36,9 @@ public:
     };
     using LogFn = std::function<void(int level, const std::string &text)>; // 1 debug, 2 info, 3 warn
 
+    /// The client settings for `account`, without a will: the login and the TLS part, shared with the sweep's own connection.
+    static mqtt::Settings settingsFor(const Account &account, const std::string &clientId);
+
     BrokerLink(phi::runtime::Loop *loop, LogFn log);
     ~BrokerLink();
 

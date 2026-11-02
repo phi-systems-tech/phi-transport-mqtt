@@ -304,6 +304,13 @@ std::string configFor(int port, const std::string &base, bool readOnly)
                 {"broker", {{"host", "127.0.0.1"}, {"port", port}}}}.dump();
 }
 
+std::string configWithDiscovery(int port, const std::string &base, bool readOnly, bool homeAssistant)
+{
+    Json j = Json::parse(configFor(port, base, readOnly));
+    j["discovery"] = {{"homeAssistant", homeAssistant}};
+    return j.dump();
+}
+
 void feed(FakeCore &core, const std::string &topic, const Json &payload)
 {
     TransportHost::event(core.plugin, topic, payload.dump());
@@ -355,7 +362,7 @@ void runEndpoint(Loop &loop, int port)
     CHECK(spy.last("phi/bridge/info"));
     if (const Heard *info = spy.last("phi/bridge/info")) {
         const Json j = Json::parse(info->payload);
-        CHECK(j["instance"] == "Test House" && j["tenant"] == "1" && j["version"] == "0.1.0" && j["sdk"] == kTransportApiVersion);
+        CHECK(j["instance"] == "Test House" && j["tenant"] == "1" && j["version"] == "0.2.0" && j["sdk"] == kTransportApiVersion);
     }
     if (const Heard *devices = spy.last("phi/bridge/devices")) {
         const Json j = Json::parse(devices->payload);
@@ -492,6 +499,13 @@ void runEndpoint(Loop &loop, int port)
     // --- a retained command is not obeyed when it is replayed ----------------------------------------
     plugin->stop();
     CHECK(waitFor(loop, [&]() { return spy.last("phi/bridge/state")->payload == "offline"; }));
+    {
+        // A clean disconnect makes the broker drop the will, so "offline" is there only because stop() said it
+        // before the line went down - and it is retained: a subscriber arriving now is told.
+        Spy late(loop, port, "late-offline", "phi/bridge/state");
+        CHECK(waitFor(loop, [&]() { return late.last("phi/bridge/state") != nullptr; }));
+        CHECK(late.last("phi/bridge/state") && late.last("phi/bridge/state")->payload == "offline" && late.last("phi/bridge/state")->retained);
+    }
     hand.publish("phi/device/10/power/set", "OFF", true);
     settle(loop, 200);
     core.calls.clear();
@@ -541,6 +555,149 @@ void runReadOnlyAndAccount(Loop &loop, int port)
     plugin2->stop();
 }
 
+
+bool logged(const FakeCore &core, LogLevel level, const std::string &needle, std::int64_t number = -1)
+{
+    for (const LogEntry &e : core.logs) {
+        if (e.level != level || e.message.find(needle) == std::string::npos) continue;
+        if (number < 0) return true;
+        for (const Scalar &sc : e.params)
+            if (const auto *i = std::get_if<std::int64_t>(&sc); i && *i == number) return true;
+    }
+    return false;
+}
+
+Json parsed(const Heard *h)
+{
+    return h ? Json::parse(h->payload, nullptr, false) : Json();
+}
+
+// Home Assistant discovery, the sweep and what stop() leaves behind.
+void runDiscovery(Loop &loop, int port)
+{
+    const std::string box = phi::endpoint::boxIdFor(phi::endpoint::currentHostname(), "1");
+    const auto config = [&](const std::string &object) { return "homeassistant/device/phi_" + box + "_" + object + "/config"; };
+    Spy spy(loop, port, "spy-d", "phid/#");
+    Spy ha(loop, port, "spy-ha", "homeassistant/#");
+    Spy hand(loop, port, "hand-d", "");
+    CHECK(waitFor(loop, [&]() { return spy.connected() && ha.connected() && hand.connected(); }));
+
+    // What an earlier run left: state and a discovery config of devices that are gone, and somebody else's config.
+    hand.publish("phid/device/99/power", "true", true);
+    hand.publish("phid/room/77", "{}", true);
+    hand.publish(config("99"), "{\"cmps\":{}}", true);
+    hand.publish("homeassistant/device/zigbee_abc/config", "{\"cmps\":{}}", true);
+    hand.publish("homeassistant/device/phi_" + box + "x_1/config", "{\"cmps\":{}}", true); // another box whose id starts like ours
+    settle(loop, 300);
+
+    FakeCore core(loop);
+    auto plugin = std::make_unique<phi::endpoint::MqttTransport>();
+    core.plugin = plugin.get();
+    plugin->setRepublishWindow(std::chrono::milliseconds(200));
+    TransportHost::attach(plugin.get(), &core, &loop);
+    std::string error;
+    CHECK(plugin->start(configWithDiscovery(port, "phid", false, true), &error));
+
+    CHECK(waitFor(loop, [&]() { return ha.last(config("10")) && ha.last(config("11")) && ha.last(config("scenes")); }));
+    // --- what appears ------------------------------------------------------------------------------
+    {
+        const Json j = parsed(ha.last(config("10")));
+        CHECK(j["dev"]["ids"] == Json::array({"phi_" + box + "_10"}) && j["dev"]["name"] == "Kitchen light" && j["dev"]["sa"] == "Kitchen");
+        CHECK(j["o"]["name"] == "phi" && j["o"]["sw"] == "0.2.0");
+        CHECK(j["availability_mode"] == "all" && j["availability"].size() == 2);
+        CHECK(j["availability"][0]["topic"] == "phid/bridge/state" && j["availability"][1]["topic"] == "phid/device/10/availability");
+        CHECK(j["cmps"]["power"]["p"] == "light" && j["cmps"]["power"]["brightness_command_topic"] == "phid/device/10/brightness/set");
+        CHECK(j["cmps"]["power"]["unique_id"] == "phi_" + box + "_10_power");
+        CHECK(j["cmps"]["button1"]["p"] == "event" && j["cmps"]["button1"]["state_topic"] == "phid/device/10/button1");
+        CHECK(!j["cmps"].contains("brightness"));
+    }
+    CHECK(parsed(ha.last(config("11")))["cmps"]["temperature"]["device_class"] == "temperature");
+    CHECK(parsed(ha.last(config("scenes")))["cmps"]["scene_20"]["command_topic"] == "phid/scene/20/set");
+    CHECK(ha.count(config("12")) == 0); // the excluded adapter's plug
+
+    // --- the sweep: stale ours cleared, everything else left alone ------------------------------------
+    CHECK(waitFor(loop, [&]() { return logged(core, LogLevel::Info, "swept", 3); }, 6000));
+    CHECK(waitFor(loop, [&]() {
+        const Heard *a = spy.last("phid/device/99/power"), *b = spy.last("phid/room/77"), *c = ha.last(config("99"));
+        return a && b && c && a->payload.empty() && b->payload.empty() && c->payload.empty();
+    }));
+    CHECK(ha.last("homeassistant/device/zigbee_abc/config")->payload == "{\"cmps\":{}}");
+    CHECK(ha.last("homeassistant/device/phi_" + box + "x_1/config")->payload == "{\"cmps\":{}}");
+    {
+        // Retained, and complete: the sweep took nothing of what is current.
+        Spy late(loop, port, "late-d", "#");
+        settle(loop, 400);
+        CHECK(late.last(config("10")) && late.last(config("10"))->retained && !late.last(config("10"))->payload.empty());
+        CHECK(late.last("phid/device/10") && late.last("phid/bridge/state") && late.last("phid/bridge/state")->payload == "online");
+        CHECK(late.count(config("99")) == 0 && late.count("phid/device/99/power") == 0);
+    }
+
+    // --- Home Assistant restarts: everything again, after a random moment --------------------------------
+    const std::size_t before10 = ha.count(config("10")), beforeScenes = ha.count(config("scenes"));
+    hand.publish("homeassistant/status", "offline");
+    settle(loop, 500);
+    CHECK(ha.count(config("10")) == before10);
+    hand.publish("homeassistant/status", "online");
+    CHECK(waitFor(loop, [&]() { return ha.count(config("10")) == before10 + 1 && ha.count(config("scenes")) == beforeScenes + 1 && ha.count(config("11")) > 1; }));
+
+    // --- a component that vanishes is named alone first, then dropped -------------------------------------
+    {
+        Json changed = device(10, 1, "Kitchen light", 5,
+                              Json::array({channel(100, "power", 1, 1, 7, true), channel(101, "brightness", 10, 2, 7, 80)}));
+        const std::size_t seen = ha.heard.size();
+        feed(core, "event.device.changed", {{"device", changed["device"]}, {"channels", changed["channels"]}});
+        CHECK(waitFor(loop, [&]() { return ha.heard.size() >= seen + 2; }));
+        std::vector<Json> updates;
+        for (std::size_t i = seen; i < ha.heard.size(); ++i)
+            if (ha.heard[i].topic == config("10")) updates.push_back(Json::parse(ha.heard[i].payload));
+        CHECK(updates.size() == 2);
+        if (updates.size() == 2) {
+            CHECK(updates[0]["cmps"]["button1"] == (Json{{"p", "event"}}) && updates[0]["cmps"].contains("power"));
+            CHECK(!updates[1]["cmps"].contains("button1") && updates[1]["cmps"].contains("power"));
+        }
+    }
+
+    // --- a room renamed, a scene added, a device removed --------------------------------------------------
+    feed(core, "event.room.updated", {{"room", {{"id", 5}, {"name", "Cooking"}, {"roomClassName", "Kitchen"}, {"floorId", 0}}}});
+    CHECK(waitFor(loop, [&]() { return parsed(ha.last(config("10")))["dev"]["sa"] == "Cooking"; }));
+    feed(core, "event.scene.updated", {{"scene", {{"id", 22}, {"name", "Morning"}, {"roomId", 0}}}});
+    CHECK(waitFor(loop, [&]() { return parsed(ha.last(config("scenes")))["cmps"].contains("scene_22"); }));
+    feed(core, "event.device.removed", {{"device", device(11, 2, "Hall sensor", 0, Json::array())["device"]}});
+    CHECK(waitFor(loop, [&]() { return ha.last(config("11")) && ha.last(config("11"))->payload.empty(); }));
+
+    // --- a clean stop leaves "offline" on the broker, retained --------------------------------------------------
+    plugin->stop();
+    {
+        Spy late(loop, port, "late-d2", "phid/bridge/state");
+        CHECK(waitFor(loop, [&]() { return late.last("phid/bridge/state") != nullptr; }));
+        CHECK(late.last("phid/bridge/state")->payload == "offline" && late.last("phid/bridge/state")->retained);
+    }
+
+    // --- read-only still hears Home Assistant, and still hears no command ---------------------------------------
+    core.calls.clear();
+    CHECK(plugin->start(configWithDiscovery(port, "phid", true, true), &error));
+    CHECK(waitFor(loop, [&]() { return spy.last("phid/bridge/state") && spy.last("phid/bridge/state")->payload == "online" && ha.last(config("10")); }));
+    settle(loop, 300);
+    const std::size_t roBefore = ha.count(config("10"));
+    hand.publish("homeassistant/status", "online");
+    CHECK(waitFor(loop, [&]() { return ha.count(config("10")) > roBefore; }));
+    hand.publish("phid/device/10/power/set", "OFF");
+    settle(loop, 300);
+    CHECK(core.callsTo("cmd.channel.invoke").empty());
+    plugin->stop();
+
+    // --- Home Assistant mode off: nothing published, what the earlier run left is cleared --------------------------
+    CHECK(ha.last(config("10")) && !ha.last(config("10"))->payload.empty()); // the configs are still on the broker
+    const std::size_t scenesBefore = ha.count(config("scenes"));
+    core.logs.clear();
+    CHECK(plugin->start(configWithDiscovery(port, "phid", false, false), &error));
+    CHECK(waitFor(loop, [&]() { return logged(core, LogLevel::Info, "swept"); }, 6000));
+    CHECK(waitFor(loop, [&]() { return ha.last(config("10"))->payload.empty() && ha.last(config("scenes"))->payload.empty(); }));
+    CHECK(ha.count(config("scenes")) == scenesBefore + 1); // the clear, and no new payload
+    CHECK(ha.last("homeassistant/device/zigbee_abc/config")->payload == "{\"cmps\":{}}");
+    plugin->stop();
+}
+
 } // namespace
 
 int main()
@@ -570,6 +727,7 @@ int main()
         EpollLoop loop;
         runEndpoint(loop, port);
         runReadOnlyAndAccount(loop, port);
+        runDiscovery(loop, port);
     }
 
     ::kill(broker, SIGTERM);

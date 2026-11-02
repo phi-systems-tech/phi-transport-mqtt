@@ -2,14 +2,17 @@
 
 #include "broker.h"
 #include "config.h"
+#include "discovery.h"
 #include "model.h"
 #include "retained.h"
+#include "sweep.h"
 #include "topics.h"
 
 #include <transportinterface.h>
 
 #include <chrono>
 #include <memory>
+#include <random>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -36,6 +39,10 @@ public:
 
     bool start(std::string_view configJson, std::string *errorString) override;
     void stop() override;
+
+    /// How long after "online" on the Home Assistant status topic the discovery is said again: a random
+    /// moment inside this window (Home Assistant's own advice, so a household of boxes does not answer in step).
+    void setRepublishWindow(std::chrono::milliseconds window) { m_republishWindow = window; }
 
 protected:
     void onCoreAsyncResult(CmdId cmdId, std::string_view payloadJson) override;
@@ -67,6 +74,12 @@ private:
     void refreshBridge();
     void scheduleBridge();
     void send(const std::vector<Message> &messages);
+    void refreshDiscovery(const Touched &touched);
+    void setDiscovery(const std::string &group, TopicMap desired);
+    void onHomeAssistantStatus(const phi::runtime::mqtt::Message &message);
+    void startSweep();
+    void onSweepResult(const std::vector<std::string> &retainedTopics);
+    void brokerLog(int level, const std::string &text) const;
     void republishDevice(int deviceId);
 
     // the broker
@@ -82,7 +95,14 @@ private:
     Topics m_topics{"phi"};
     Model m_model;
     Retained m_retained;
+    DiscoveryContext m_discovery;
+    BrokerLink::Account m_account;
     std::unique_ptr<BrokerLink> m_link;
+    std::unique_ptr<Sweep> m_sweep;
+    bool m_swept = false;
+    std::chrono::milliseconds m_republishWindow{5000};
+    std::mt19937 m_random{std::random_device{}()};
+    phi::runtime::Timer m_discoveryRepublish;
     bool m_running = false;
     bool m_synced = false;
     bool m_haveHello = false;

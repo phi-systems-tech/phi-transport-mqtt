@@ -18,6 +18,19 @@ BrokerLink::~BrokerLink()
     stop();
 }
 
+mqtt::Settings BrokerLink::settingsFor(const Account &account, const std::string &clientId)
+{
+    mqtt::Settings settings;
+    settings.clientId = clientId;
+    settings.host = account.host;
+    settings.port = account.port;
+    settings.username = account.username;
+    settings.password = account.password;
+    settings.tls.enabled = account.tls;
+    settings.tls.caFile = account.caFile;
+    return settings;
+}
+
 void BrokerLink::start(Account account, Options options)
 {
     stop();
@@ -49,14 +62,7 @@ void BrokerLink::dial()
 {
     m_retry.reset();
     if (!m_running || !m_client) return;
-    mqtt::Settings settings;
-    settings.clientId = m_options.clientId;
-    settings.host = m_account.host;
-    settings.port = m_account.port;
-    settings.username = m_account.username;
-    settings.password = m_account.password;
-    settings.tls.enabled = m_account.tls;
-    settings.tls.caFile = m_account.caFile;
+    mqtt::Settings settings = settingsFor(m_account, m_options.clientId);
     settings.will = mqtt::Will{m_options.stateTopic, kOffline, kQos, true};
     std::string error;
     if (!m_client->connect(settings, &error)) {

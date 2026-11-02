@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(phi-transport-mqtt
-    VERSION 0.1.0
+    VERSION 0.2.0
     DESCRIPTION "MQTT endpoint transport for phi-core: devices, rooms and scenes on a broker, commands from it"
     LANGUAGES CXX
 )
@@ -43,6 +43,8 @@ add_library(phi_mqtt_core STATIC
     src/command.h
     src/config.cpp
     src/config.h
+    src/discovery.cpp
+    src/discovery.h
     src/model.cpp
     src/model.h
     src/mqtttransport.cpp
@@ -51,6 +53,8 @@ add_library(phi_mqtt_core STATIC
     src/payload.h
     src/retained.cpp
     src/retained.h
+    src/sweep.cpp
+    src/sweep.h
     src/topics.cpp
     src/topics.h
 )
@@ -82,6 +86,12 @@ if(BUILD_TESTING)
     add_executable(mqtt_tests tests/mqtt_tests.cpp)
     target_link_libraries(mqtt_tests PRIVATE phi_mqtt_core)
     add_test(NAME mqtt_tests COMMAND mqtt_tests)
+
+    # The Home Assistant discovery against tests/golden/*.json.
+    add_executable(mqtt_discovery_tests tests/discovery_tests.cpp)
+    target_link_libraries(mqtt_discovery_tests PRIVATE phi_mqtt_core)
+    target_compile_definitions(mqtt_discovery_tests PRIVATE PHI_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/golden")
+    add_test(NAME mqtt_discovery_tests COMMAND mqtt_discovery_tests)
 
     # The plugin against a mosquitto started on a free port, with a fake core
     # facade. Skipped (exit 77) where /usr/sbin/mosquitto is missing.

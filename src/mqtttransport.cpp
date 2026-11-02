@@ -41,6 +41,8 @@ constexpr std::chrono::seconds kSceneRefresh{60};
 // Many device changes arrive in a burst (an adapter reconnecting); the
 // description of the whole house is said once after it.
 constexpr std::chrono::milliseconds kBridgeDebounce{250};
+// How long the sweep listens for the broker's retained topics after the first connect.
+constexpr std::chrono::milliseconds kSweepWindow{2000};
 
 // The broker's ACL is the credential here, the argument the Matter bridge's
 // fabrics and the voice satellites' household key make: a writer on the
@@ -115,6 +117,13 @@ bool MqttTransport::start(std::string_view configJson, std::string *errorString)
         return false;
     }
     m_topics = Topics(m_config.baseTopic);
+    m_discovery = DiscoveryContext();
+    m_discovery.topics = m_topics;
+    m_discovery.prefix = m_config.discovery.prefix;
+    m_discovery.version = PHI_MQTT_VERSION;
+    m_sweep.reset();
+    m_swept = false;
+    m_discoveryRepublish.reset();
     m_model = Model();
     m_model.setConfig(m_config);
     m_retained = Retained();
@@ -140,6 +149,8 @@ void MqttTransport::stop()
     m_credentialsRetry.reset();
     m_bridgeTimer.reset();
     m_sceneRefresh.reset();
+    m_discoveryRepublish.reset();
+    m_sweep.reset();
     m_link.reset(); // says "offline" on the way out
     m_pending.clear();
     m_earlyEvents.clear();
@@ -166,6 +177,8 @@ void MqttTransport::bootstrap()
             m_instance = textOf(hello, "instanceLabel");
         }
         m_haveHello = true;
+        // Hostname and tenant: stable where the instance label is free text, and unique per box.
+        m_discovery.boxId = boxIdFor(currentHostname(), m_tenant);
     }
     startSync();
 }
@@ -332,20 +345,27 @@ void MqttTransport::onBrokerCredentials(const Json &payload)
     startLink(std::move(account));
 }
 
+void MqttTransport::brokerLog(int level, const std::string &text) const
+{
+    // 1 debug, 2 info, 3 warn
+    writeLog(static_cast<LogLevel>(level + 1), makeCategory(LogCategory::Transport), "%1", {Scalar{text}}, "mqtt.broker");
+}
+
 void MqttTransport::startLink(BrokerLink::Account account)
 {
-    m_link = std::make_unique<BrokerLink>(runtimeLoop(), [this](int level, const std::string &text) {
-        // 1 debug, 2 info, 3 warn
-        writeLog(static_cast<LogLevel>(level + 1), makeCategory(LogCategory::Transport), "%1",
-                 {Scalar{text}}, "mqtt.broker");
+    m_account = account;
+    m_link = std::make_unique<BrokerLink>(runtimeLoop(), [this](int level, const std::string &text) { brokerLog(level, text); });
+    m_link->onConnected([this]() {
+        send(m_retained.replayAll());
+        if (!m_swept) startSweep();
     });
-    m_link->onConnected([this]() { send(m_retained.replayAll()); });
     m_link->onDisconnected([this]() { m_retained.setOffline(); });
     m_link->onMessage([this](const phi::runtime::mqtt::Message &m) { onBrokerMessage(m); });
     BrokerLink::Options options;
     options.stateTopic = m_topics.bridgeState();
-    // A read-only endpoint listens to nothing: no command can reach it.
+    // A read-only endpoint listens to no command. Home Assistant's status is not one: it only asks for the discovery again.
     if (!m_config.readOnly) options.subscriptions = m_topics.subscriptions();
+    if (m_config.discovery.homeAssistant) options.subscriptions.push_back(statusTopic(m_config.discovery.prefix));
     m_link->start(std::move(account), std::move(options));
 }
 
@@ -466,7 +486,70 @@ void MqttTransport::refresh(const Touched &touched, bool force)
         const Scene *scene = m_model.scene(id);
         send(m_retained.set("scene/" + std::to_string(id), scene ? sceneTopics(m_topics, m_model, *scene) : TopicMap(), force));
     }
+    refreshDiscovery(touched);
     if (touched.topology) scheduleBridge();
+}
+
+// --- Home Assistant discovery ------------------------------------------------------
+
+void MqttTransport::refreshDiscovery(const Touched &touched)
+{
+    // Off: nothing is published, and what an earlier run left is the sweep's to clear.
+    if (!m_config.discovery.homeAssistant) return;
+    for (const int id : touched.devices) {
+        const Device *device = m_model.device(id);
+        setDiscovery("discovery/" + std::to_string(id),
+                     device ? deviceDiscovery(m_discovery, m_model, *device) : TopicMap());
+    }
+    if (!touched.scenes.empty()) setDiscovery("discovery/scenes", sceneDiscovery(m_discovery, m_model));
+}
+
+void MqttTransport::setDiscovery(const std::string &group, TopicMap desired)
+{
+    // A component that is gone is first said with nothing but its platform, which is what makes
+    // Home Assistant remove the entity; the payload without it follows.
+    for (const auto &[topic, payload] : desired)
+        if (const auto step = removalStep(m_retained.payloadOf(group, topic), payload)) send({Message{topic, *step, true}});
+    send(m_retained.set(group, std::move(desired)));
+}
+
+void MqttTransport::onHomeAssistantStatus(const phi::runtime::mqtt::Message &message)
+{
+    // A retained "online" is about the past; what is current went out with the connect.
+    if (message.retained || message.payload != "online" || m_discoveryRepublish) return;
+    // Home Assistant has just (re)started and only listens now.
+    const auto ms = std::chrono::milliseconds(std::uniform_int_distribution<std::int64_t>(0, m_republishWindow.count())(m_random));
+    m_discoveryRepublish = runtimeLoop()->timerAfter(ms, [this]() {
+        m_discoveryRepublish.reset();
+        if (m_running) send(m_retained.messagesOf("discovery/"));
+    });
+}
+
+// --- the sweep -----------------------------------------------------------------------
+
+void MqttTransport::startSweep()
+{
+    m_swept = true;
+    m_sweep = std::make_unique<Sweep>(runtimeLoop(), [this](int level, const std::string &text) { brokerLog(level, text); });
+    // The discovery filter is listened to with Home Assistant mode off as well: a config an earlier run left is cleared.
+    m_sweep->start(m_account, {m_topics.base() + "/#", configTopic(m_config.discovery.prefix, "+")}, kSweepWindow,
+                   [this](const std::vector<std::string> &topics) { onSweepResult(topics); });
+}
+
+void MqttTransport::onSweepResult(const std::vector<std::string> &retainedTopics)
+{
+    if (!m_running) return;
+    std::vector<Message> clears;
+    for (const std::string &topic : retainedTopics) {
+        const bool ours = topic.compare(0, m_topics.base().size() + 1, m_topics.base() + "/") == 0
+                          || isOwnConfigTopic(m_discovery, topic);
+        // bridge/state belongs to the broker link, not to the ledger.
+        if (!ours || topic == m_topics.bridgeState() || m_retained.has(topic)) continue;
+        clears.push_back(Message{topic, std::string(), true});
+    }
+    if (clears.empty()) return;
+    send(clears);
+    logInfo("mqtt.sweep", "swept %1 stale topic(s)", {Scalar{static_cast<std::int64_t>(clears.size())}});
 }
 
 void MqttTransport::scheduleBridge()
@@ -503,7 +586,12 @@ void MqttTransport::republishDevice(int deviceId)
 
 void MqttTransport::onBrokerMessage(const phi::runtime::mqtt::Message &message)
 {
-    if (!m_running || m_config.readOnly) return;
+    if (!m_running) return;
+    if (m_config.discovery.homeAssistant && message.topic == statusTopic(m_config.discovery.prefix)) {
+        onHomeAssistantStatus(message);
+        return;
+    }
+    if (m_config.readOnly) return;
     const Topics::Command cmd = m_topics.parseCommand(message.topic);
     if (cmd.kind == Topics::Command::Kind::None) return;
     // A command is an act, not a state. A retained one is replayed at every
