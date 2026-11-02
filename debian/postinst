@@ -1,0 +1,17 @@
+#!/bin/sh
+set -e
+
+# The transport's state directory. Reserved: the transport keeps no state of
+# its own today, but the host layer and the other transports agree on the
+# path, so it exists from the first start.
+case "$1" in
+    configure)
+        if getent passwd phi >/dev/null 2>&1; then
+            install -d -m 0700 -o phi -g phi /var/lib/phi/@1/transports/mqtt/state
+        fi
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

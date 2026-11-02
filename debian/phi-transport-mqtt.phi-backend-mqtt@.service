@@ -1,0 +1,15 @@
+[Unit]
+Description=MQTT endpoint backend %i (phi): the broker account of the MQTT transport
+Documentation=file:///usr/share/doc/phi-transport-mqtt
+
+# The MQTT backend is not a process of its own: the endpoint is served by
+# phi-transport-mqtt, a sidecar under phi-core@1. This unit exists so the
+# host layer has a backend to mint the broker account for and to show as
+# running; it does nothing else.
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/true
+
+[Install]
+WantedBy=multi-user.target

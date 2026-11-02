@@ -1,0 +1,35 @@
+Source: phi-transport-mqtt
+Section: net
+Priority: optional
+Maintainer: Marius Schumacher <marius.schumacher@phisys.com>
+Build-Depends:
+ debhelper-compat (= 13),
+ cmake,
+ ninja-build,
+ pkgconf,
+ phi-transport-api-dev (>= 2.2.0),
+ libphi-runtime-dev,
+ libphi-runtime-mqtt-dev,
+ nlohmann-json3-dev
+Standards-Version: 4.7.0
+Rules-Requires-Root: no
+Homepage: https://github.com/phi-systems-tech/phi-transport-mqtt
+
+Package: phi-transport-mqtt
+Architecture: any
+Depends:
+ ${misc:Depends},
+ ${shlibs:Depends},
+ phi-hostd (>= 0.0~git202610191200)
+Suggests: phi-mosquitto
+Description: MQTT endpoint transport for phi-core
+ phi as an MQTT endpoint: the tenant's devices, channels, rooms and scenes
+ published on a broker, and commands accepted there, so Home Assistant,
+ openHAB, ioBroker, Node-RED and plain scripts can consume a phi box without
+ speaking phi's own WebSocket protocol.
+ .
+ A transport plugin for phi-core, hosted out of process by phi-transport-host
+ (config /etc/phi/@1/transports/mqtt.json, state under
+ /var/lib/phi/@1/transports/mqtt/state). On the box it logs in to the box
+ broker (phi-mosquitto) with an account phi-hostd mints for it; a broker on
+ another machine is configured in mqtt.json.

@@ -1,0 +1,5 @@
+phi-transport-mqtt (0.1.0-1) trixie; urgency=medium
+
+  * First release: phi's devices, channels, rooms and scenes on an MQTT broker (bridge, room, scene, device and channel topics, availability, events), commands on <channel>/set, device/set and scene/set. Home Assistant discovery follows.
+
+ -- Marius Schumacher <marius.schumacher@phisys.com>  Mon, 02 Nov 2026 20:00:00 +0100

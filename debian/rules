@@ -1,0 +1,15 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@ --buildsystem=cmake --builddirectory=build/deb
+
+override_dh_auto_configure:
+	dh_auto_configure -- -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+
+override_dh_auto_install:
+	dh_auto_install --destdir=debian/tmp
+
+# A template the host layer instantiates (`phi-backend-mqtt@main`) when the
+# backend intent is applied; nothing to enable or start here.
+override_dh_installsystemd:
+	dh_installsystemd --no-enable --no-start --name=phi-backend-mqtt@

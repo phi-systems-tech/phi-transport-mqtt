@@ -1,0 +1,11 @@
+{
+  "kind": "mqtt",
+  "displayName": "MQTT endpoint",
+  "unitPrefix": "phi-backend-mqtt@",
+  "dataPrefix": "mqtt@",
+  "environment": {
+    "brokerUser": "PHI_MQTT_BROKER_USER",
+    "brokerPassword": "PHI_MQTT_BROKER_PASSWORD"
+  },
+  "brokerTopics": ["phi/#", "homeassistant/#"]
+}

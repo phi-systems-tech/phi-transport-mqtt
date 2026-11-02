@@ -1,0 +1,4 @@
+usr/lib/*/phi/plugins/transports/libphi_transport_mqtt.so
+debian/mqtt.json etc/phi/@1/transports/
+share/backend-mqtt.json usr/share/phi/backends
+share/intent-backend-mqtt.json usr/share/phi/intents/backends
