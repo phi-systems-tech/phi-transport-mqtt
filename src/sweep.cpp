@@ -34,11 +34,13 @@ void Sweep::start(const BrokerLink::Account &account, std::vector<std::string> f
         // Only reached when the line breaks before the window ends: finish() disconnects quietly.
         m_window.reset();
         m_log(3, "sweep: the broker line broke: " + reason);
+        m_done = nullptr;
     });
     std::string error;
     if (!m_client->connect(BrokerLink::settingsFor(account, "phi-transport-mqtt-sweep"), &error)) {
         m_log(3, "sweep: " + error);
         m_client.reset();
+        m_done = nullptr;
     }
 }
 

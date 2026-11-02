@@ -34,6 +34,9 @@ public:
     ~Sweep();
 
     /// `Done` is not called when the broker cannot be reached; the next start of the transport looks again.
+    /// True from start() until the answer: a sweep whose line broke or never opened is not running.
+    bool running() const { return static_cast<bool>(m_done); }
+
     void start(const BrokerLink::Account &account, std::vector<std::string> filters, std::chrono::milliseconds window,
                Done done);
 

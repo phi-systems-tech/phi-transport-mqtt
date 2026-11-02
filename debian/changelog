@@ -1,3 +1,9 @@
+phi-transport-mqtt (0.3.0-1) trixie; urgency=medium
+
+  * Management card: summary, republish, sweep, settings through core's transport config override.
+
+ -- Marius Schumacher <marius.schumacher@phisys.com>  Mon, 02 Nov 2026 12:43:00 +0100
+
 phi-transport-mqtt (0.2.0-1) trixie; urgency=medium
 
   * Home Assistant device-based discovery; stale retained topics swept at start; offline said on a clean stop.

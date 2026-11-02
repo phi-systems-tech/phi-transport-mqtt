@@ -52,6 +52,8 @@ public:
     void onMessage(std::function<void(const mqtt::Message &)> fn) { m_onMessage = std::move(fn); }
 
     bool connected() const { return m_client && m_client->connected(); }
+    /// Why the line is down, as the client said it; empty while connected or before the first attempt.
+    const std::string &lastError() const { return m_lastError; }
     bool running() const { return m_running; }
 
     /// QoS 1. Silently dropped while the broker is away (the ledger replays on connect).
@@ -73,6 +75,7 @@ private:
     std::function<void(const mqtt::Message &)> m_onMessage;
     std::unique_ptr<mqtt::Client> m_client;
     phi::runtime::Timer m_retry;
+    std::string m_lastError;
     bool m_running = false;
 };
 

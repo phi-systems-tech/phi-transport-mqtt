@@ -66,6 +66,7 @@ void BrokerLink::dial()
     settings.will = mqtt::Will{m_options.stateTopic, kOffline, kQos, true};
     std::string error;
     if (!m_client->connect(settings, &error)) {
+        m_lastError = error;
         m_log(3, "broker: " + error);
         m_retry = m_loop->timerAfter(kRetry, [this]() { dial(); });
     }
@@ -73,6 +74,7 @@ void BrokerLink::dial()
 
 void BrokerLink::onConnectedInternal()
 {
+    m_lastError.clear();
     std::string error;
     for (const std::string &filter : m_options.subscriptions)
         if (!m_client->subscribe(filter, kQos, &error)) m_log(3, "broker: subscribe to " + filter + " failed: " + error);
@@ -84,6 +86,7 @@ void BrokerLink::onConnectedInternal()
 
 void BrokerLink::onDisconnectedInternal(const std::string &reason)
 {
+    m_lastError = reason;
     m_log(3, "broker connection lost: " + reason);
     if (m_onDisconnected) m_onDisconnected();
     if (!m_running) return;

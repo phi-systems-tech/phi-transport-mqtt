@@ -236,6 +236,33 @@ a `RemoteKey` that only reports (no event is published for it).
 | `excludeAdapters` | `[]` | adapter plugin types (`"tuya"`) or adapter ids (`7`) whose devices are never published |
 | `broker` | absent | `{host, port, username, password, tls:{caFile}}`: a foreign broker. Used instead of the hostd account. `port` defaults to 1883, or 8883 when `tls` is present; a `tls` block turns TLS on (the chain is always verified, `caFile` names the authority, empty = the system store) |
 | `discovery` | absent | `{homeAssistant: true, prefix: "homeassistant"}`: `homeAssistant: false` switches the Home Assistant discovery off, `prefix` is Home Assistant's discovery prefix. With it off nothing is published and an earlier run's configs are cleared at start |
+| `enabled` | `true` | core's switch, not the transport's: `false` loads the plugin without starting it. The transport ignores the key |
+
+### Management
+
+phi-ui's transports page shows a card for the endpoint (`describeManagement`):
+
+- **Summary**: `on the broker 127.0.0.1:1883 as mqtt_main, 76 devices, 741 topics, Home Assistant
+  discovery on` (with `, read-only` when it is). While the line is down it says `broker not
+  reachable: <reason>`; before the box account exists, `waiting for the broker account`.
+- **Republish everything**: says every retained topic again, the Home Assistant discovery
+  included, as a reconnect does. The answer is the count (`741 topics republished`).
+- **Sweep my topics**: looks at the broker once more and clears the retained topics under the
+  base topic and this box's discovery that the transport no longer publishes (the sweep that also
+  runs after the first connect). Asks first; the answer is `N stale topic(s) swept`.
+- **Settings**: a form with Home Assistant discovery, discovery prefix, read-only, base topic and,
+  for a broker of your own, host, port, username, password, TLS and CA file. The values are the
+  running config's. The password is never sent to the browser: left empty, the stored one stays.
+
+The transport writes no config file. Settings go to core as `cmd.transport.config.get` and
+`cmd.transport.config.set`: the whole runtime override of `/var/lib/phi/@<tenant>/transports/mqtt/current/config.json`
+is read, the form's keys are applied (`broker` is removed when "use a broker of my own" is off;
+`hosting`, `stateDir`, `enabled`, `excludeAdapters` and unknown keys are left as they are), the
+result is checked with the same rules as at start, and the object goes back with `restart: true`.
+A form the transport would refuse at start (a base topic other than `phi` without a broker of
+your own, a port outside 1..65535, no host) is refused with the reason before anything is saved.
+Switching the transport on and off is core's `enabled`, from the transports page or
+`phi-cli transport stop/start`, not an action of this card.
 
 ### The broker account (box broker)
 

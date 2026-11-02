@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(phi-transport-mqtt
-    VERSION 0.2.0
+    VERSION 0.3.0
     DESCRIPTION "MQTT endpoint transport for phi-core: devices, rooms and scenes on a broker, commands from it"
     LANGUAGES CXX
 )
@@ -41,6 +41,8 @@ add_library(phi_mqtt_core STATIC
     src/broker.h
     src/command.cpp
     src/command.h
+    src/managementcard.cpp
+    src/managementcard.h
     src/config.cpp
     src/config.h
     src/discovery.cpp

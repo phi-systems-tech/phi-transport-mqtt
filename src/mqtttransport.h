@@ -11,6 +11,7 @@
 #include <transportinterface.h>
 
 #include <chrono>
+#include <string_view>
 #include <memory>
 #include <random>
 #include <string>
@@ -40,6 +41,10 @@ public:
     bool start(std::string_view configJson, std::string *errorString) override;
     void stop() override;
 
+    // The management card: what the transport is doing, and republish, sweep and settings.
+    phicore::transport::JsonText describeManagement() const override;
+    bool invokeAction(CmdId cmdId, std::string_view actionId, std::string_view paramsJson) override;
+
     /// How long after "online" on the Home Assistant status topic the discovery is said again: a random
     /// moment inside this window (Home Assistant's own advice, so a household of boxes does not answer in step).
     void setRepublishWindow(std::chrono::milliseconds window) { m_republishWindow = window; }
@@ -49,12 +54,16 @@ protected:
     void onCoreEvent(std::string_view topic, std::string_view payloadJson) override;
 
 private:
-    enum class PendingKind { Adapters, Rooms, Scenes, ScenesRefresh, Devices, Credentials, ChannelInvoke, SceneInvoke };
+    enum class PendingKind { Adapters, Rooms, Scenes, ScenesRefresh, Devices, Credentials, ChannelInvoke, SceneInvoke, ConfigGet, ConfigSet };
     struct Pending {
-        PendingKind kind;
+        Pending() = default;
+        explicit Pending(PendingKind k) : kind(k) {}
+        PendingKind kind = PendingKind::Adapters;
         int deviceId = 0;
         int channelId = 0;
         int sceneId = 0;
+        CmdId action = 0;   // the management action waiting for this answer
+        std::string params; // ConfigGet: the settings form to merge once the override is read
     };
 
     // bootstrap
@@ -78,9 +87,20 @@ private:
     void setDiscovery(const std::string &group, TopicMap desired);
     void onHomeAssistantStatus(const phi::runtime::mqtt::Message &message);
     void startSweep();
-    void onSweepResult(const std::vector<std::string> &retainedTopics);
+    std::size_t onSweepResult(const std::vector<std::string> &retainedTopics);
     void brokerLog(int level, const std::string &text) const;
     void republishDevice(int deviceId);
+
+    // management actions
+    void republishAction(CmdId cmdId);
+    void sweepAction(CmdId cmdId);
+    void settingsAction(CmdId cmdId, std::string_view paramsJson);
+    void onConfigRead(const Pending &pending, const nlohmann::json &payload);
+    void finishSweepAction(const std::string &error, std::size_t swept);
+    /// Answers the actions still waiting when the transport stops. A saved config answers as saved:
+    /// core restarts the transport to apply it, which is the stop that comes here.
+    void settleActions();
+    void failAction(CmdId cmdId, const std::string &message, int statusCode) const;
 
     // the broker
     void onBrokerMessage(const phi::runtime::mqtt::Message &message);
@@ -100,6 +120,8 @@ private:
     std::unique_ptr<BrokerLink> m_link;
     std::unique_ptr<Sweep> m_sweep;
     bool m_swept = false;
+    CmdId m_sweepActionId = 0;
+    phi::runtime::Timer m_sweepActionTimeout;
     std::chrono::milliseconds m_republishWindow{5000};
     std::mt19937 m_random{std::random_device{}()};
     phi::runtime::Timer m_discoveryRepublish;

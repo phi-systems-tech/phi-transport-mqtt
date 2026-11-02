@@ -1,6 +1,7 @@
 #include "mqtttransport.h"
 
 #include "command.h"
+#include "managementcard.h"
 #include "payload.h"
 
 #include <nlohmann/json.hpp>
@@ -27,6 +28,10 @@ constexpr const char *kTopicDevicesList = "cmd.devices.list";
 constexpr const char *kTopicChannelInvoke = "cmd.channel.invoke";
 constexpr const char *kTopicSceneInvoke = "cmd.scene.invoke";
 constexpr const char *kTopicBrokerCredentials = "cmd.host.broker.credentials";
+// The runtime override core keeps for a transport (the layer between the shipped config and the
+// tenant's): the settings form reads it and writes the whole object back.
+constexpr const char *kTopicConfigGet = "cmd.transport.config.get";
+constexpr const char *kTopicConfigSet = "cmd.transport.config.set";
 // The backend phi-hostd mints the broker account for: kind `mqtt`, id `main`
 // (share/intent-backend-mqtt.json).
 constexpr const char *kBackendName = "mqtt@main";
@@ -43,6 +48,8 @@ constexpr std::chrono::seconds kSceneRefresh{60};
 constexpr std::chrono::milliseconds kBridgeDebounce{250};
 // How long the sweep listens for the broker's retained topics after the first connect.
 constexpr std::chrono::milliseconds kSweepWindow{2000};
+// A sweep that is not answered by now (the line broke) is told to the person, not waited for.
+constexpr std::chrono::seconds kSweepActionTimeout{12};
 
 // The broker's ACL is the credential here, the argument the Matter bridge's
 // fabrics and the voice satellites' household key make: a writer on the
@@ -122,6 +129,8 @@ bool MqttTransport::start(std::string_view configJson, std::string *errorString)
     m_discovery.prefix = m_config.discovery.prefix;
     m_discovery.version = PHI_MQTT_VERSION;
     m_sweep.reset();
+    m_sweepActionId = 0;
+    m_sweepActionTimeout.reset();
     m_swept = false;
     m_discoveryRepublish.reset();
     m_model = Model();
@@ -145,12 +154,14 @@ void MqttTransport::stop()
 {
     if (!m_running && !m_link) return;
     m_running = false;
+    settleActions();
     m_bootstrap.reset();
     m_credentialsRetry.reset();
     m_bridgeTimer.reset();
     m_sceneRefresh.reset();
     m_discoveryRepublish.reset();
     m_sweep.reset();
+    m_sweepActionTimeout.reset();
     m_link.reset(); // says "offline" on the way out
     m_pending.clear();
     m_earlyEvents.clear();
@@ -221,9 +232,15 @@ void MqttTransport::onCoreAsyncResult(CmdId cmdId, std::string_view payloadJson)
     if (it == m_pending.end()) return;
     const Pending pending = it->second;
     m_pending.erase(it);
-    if (!m_running) return;
+    if (!m_running) {
+        failAction(pending.action, "The transport stopped before core answered", status::kFailure);
+        return;
+    }
     const Json payload = Json::parse(payloadJson, nullptr, false);
-    if (!payload.is_object()) return;
+    if (!payload.is_object()) {
+        failAction(pending.action, "Core's answer was not understood", status::kFailure);
+        return;
+    }
     try {
         switch (pending.kind) {
         case PendingKind::Adapters:
@@ -252,8 +269,21 @@ void MqttTransport::onCoreAsyncResult(CmdId cmdId, std::string_view payloadJson)
         case PendingKind::SceneInvoke:
             onInvokeResult(pending, payload);
             break;
+        case PendingKind::ConfigGet:
+            onConfigRead(pending, payload);
+            break;
+        case PendingKind::ConfigSet:
+            if (payload.value("status", 0) != 0) {
+                const std::string detail = errorTextOf(payload);
+                failAction(pending.action, "Core did not save the settings" + (detail.empty() ? std::string() : ": " + detail),
+                           status::kFailure);
+            } else {
+                completeAction(pending.action, makeActionResultText("Saved; the transport restarts."));
+            }
+            break;
         }
     } catch (const Json::exception &e) {
+        failAction(pending.action, "Core's answer was not understood", status::kFailure);
         logWarn("mqtt.sync", "An answer from core was not understood: %1", {Scalar{std::string(e.what())}});
     }
 }
@@ -533,12 +563,15 @@ void MqttTransport::startSweep()
     m_sweep = std::make_unique<Sweep>(runtimeLoop(), [this](int level, const std::string &text) { brokerLog(level, text); });
     // The discovery filter is listened to with Home Assistant mode off as well: a config an earlier run left is cleared.
     m_sweep->start(m_account, {m_topics.base() + "/#", configTopic(m_config.discovery.prefix, "+")}, kSweepWindow,
-                   [this](const std::vector<std::string> &topics) { onSweepResult(topics); });
+                   [this](const std::vector<std::string> &topics) {
+                       const std::size_t swept = onSweepResult(topics);
+                       finishSweepAction({}, swept);
+                   });
 }
 
-void MqttTransport::onSweepResult(const std::vector<std::string> &retainedTopics)
+std::size_t MqttTransport::onSweepResult(const std::vector<std::string> &retainedTopics)
 {
-    if (!m_running) return;
+    if (!m_running) return 0;
     std::vector<Message> clears;
     for (const std::string &topic : retainedTopics) {
         const bool ours = topic.compare(0, m_topics.base().size() + 1, m_topics.base() + "/") == 0
@@ -547,9 +580,10 @@ void MqttTransport::onSweepResult(const std::vector<std::string> &retainedTopics
         if (!ours || topic == m_topics.bridgeState() || m_retained.has(topic)) continue;
         clears.push_back(Message{topic, std::string(), true});
     }
-    if (clears.empty()) return;
+    if (clears.empty()) return 0;
     send(clears);
     logInfo("mqtt.sweep", "swept %1 stale topic(s)", {Scalar{static_cast<std::int64_t>(clears.size())}});
+    return clears.size();
 }
 
 void MqttTransport::scheduleBridge()
@@ -580,6 +614,164 @@ void MqttTransport::republishDevice(int deviceId)
     Touched t;
     t.devices.insert(deviceId);
     refresh(t, true);
+}
+
+// --- management --------------------------------------------------------------------
+
+JsonText MqttTransport::describeManagement() const
+{
+    ManagementState state;
+    state.running = m_running;
+    state.foreignBroker = m_config.broker.has_value();
+    state.homeAssistant = m_config.discovery.homeAssistant;
+    state.readOnly = m_config.readOnly;
+    if (m_link) {
+        state.hasLink = true;
+        state.connected = m_link->connected();
+        state.host = m_account.host;
+        state.port = m_account.port;
+        state.username = m_account.username;
+        state.lastError = m_link->lastError();
+    }
+    for (const auto &[id, device] : m_model.devices())
+        if (!m_model.excluded(device)) ++state.devices;
+    state.topics = m_retained.topicCount();
+
+    // Members for the inside of a descriptor: the dump of an object without its braces.
+    const auto members = [](const Json &object) {
+        const std::string text = object.dump();
+        return text.substr(1, text.size() - 2);
+    };
+    const std::string republish = makeActionDescriptor(
+        "republish", "Republish everything", "Says every retained topic again, and the Home Assistant discovery.");
+    const std::string sweep = makeActionDescriptor(
+        "sweep", "Sweep my topics", "Looks at what the broker still holds and clears the topics that are no longer ours to publish.",
+        members(Json{{"confirm",
+                      {{"title", "Sweep my topics?"},
+                       {"message", "Clears the retained topics under " + m_config.baseTopic
+                                       + "/ and this box's Home Assistant discovery that the transport no longer publishes. What is current stays."},
+                       {"okLabel", "Sweep"}}}}));
+    const std::string settings = makeActionDescriptor(
+        "settings", "Settings",
+        "Home Assistant discovery, read-only, the base topic and a broker of your own. Saving restarts the transport.",
+        members(Json{{"hasForm", true}, {"form", settingsForm(m_config)}}));
+    return makeManagementDescription(managementSummary(state), {republish, sweep, settings});
+}
+
+void MqttTransport::failAction(CmdId cmdId, const std::string &message, int statusCode) const
+{
+    if (cmdId != 0) completeAction(cmdId, makeActionResultError(message, statusCode));
+}
+
+bool MqttTransport::invokeAction(CmdId cmdId, std::string_view actionId, std::string_view paramsJson)
+{
+    if (actionId != "republish" && actionId != "sweep" && actionId != "settings") return false;
+    if (!m_running) {
+        failAction(cmdId, "The transport is not running", status::kFailure);
+        return true;
+    }
+    if (actionId == "republish") republishAction(cmdId);
+    else if (actionId == "sweep") sweepAction(cmdId);
+    else settingsAction(cmdId, paramsJson);
+    return true;
+}
+
+void MqttTransport::republishAction(CmdId cmdId)
+{
+    if (!m_link || !m_link->connected()) {
+        failAction(cmdId, "The broker is not connected", status::kFailure);
+        return;
+    }
+    // What a reconnect does: the ledger says it all again, discovery included, and the clears that waited.
+    const std::vector<Message> messages = m_retained.replayAll();
+    send(messages);
+    logInfo("mqtt.republish", "republished %1 topic(s)", {Scalar{static_cast<std::int64_t>(messages.size())}});
+    completeAction(cmdId, makeActionResultText(std::to_string(messages.size()) + (messages.size() == 1 ? " topic republished" : " topics republished")));
+}
+
+void MqttTransport::sweepAction(CmdId cmdId)
+{
+    if (!m_link || !m_link->connected()) {
+        failAction(cmdId, "The broker is not connected", status::kFailure);
+        return;
+    }
+    if (m_sweepActionId != 0 || (m_sweep && m_sweep->running())) {
+        failAction(cmdId, "A sweep is already running", status::kBusy);
+        return;
+    }
+    m_sweepActionId = cmdId;
+    m_sweepActionTimeout = runtimeLoop()->timerAfter(kSweepActionTimeout, [this]() {
+        finishSweepAction("The broker did not answer the sweep", 0);
+    });
+    startSweep();
+}
+
+void MqttTransport::finishSweepAction(const std::string &error, std::size_t swept)
+{
+    if (m_sweepActionId == 0) return;
+    const CmdId cmdId = m_sweepActionId;
+    m_sweepActionId = 0;
+    m_sweepActionTimeout.reset();
+    if (!error.empty()) failAction(cmdId, error, status::kFailure);
+    else completeAction(cmdId, makeActionResultText(std::to_string(swept) + " stale topic(s) swept"));
+}
+
+void MqttTransport::settingsAction(CmdId cmdId, std::string_view paramsJson)
+{
+    const Json params = Json::parse(paramsJson, nullptr, false);
+    if (!params.is_object()) {
+        failAction(cmdId, "The settings are not a form", status::kInvalidArgument);
+        return;
+    }
+    // The override is read again for every save: another editor (phi-cli) may have written it since the card was drawn.
+    const AsyncResult r = callCoreAsync(kTopicConfigGet, dumpJson(Json{{"pluginType", kPluginType}}), mqttIdentity());
+    if (!r.accepted) {
+        failAction(cmdId, "Core refused to read the config: " + (r.error ? r.error->message : std::string("no reason")), status::kFailure);
+        return;
+    }
+    Pending pending{PendingKind::ConfigGet};
+    pending.action = cmdId;
+    pending.params = std::string(paramsJson);
+    m_pending[r.cmdId] = std::move(pending);
+}
+
+void MqttTransport::onConfigRead(const Pending &pending, const Json &payload)
+{
+    if (payload.value("status", 0) != 0) {
+        const std::string detail = errorTextOf(payload);
+        failAction(pending.action, "Core refused to read the config" + (detail.empty() ? std::string() : ": " + detail), status::kFailure);
+        return;
+    }
+    const auto object = [&](const char *key) {
+        const auto it = payload.find(key);
+        return it != payload.end() && it->is_object() ? *it : Json::object();
+    };
+    Json merged;
+    std::string error;
+    if (!mergeSettings(object("override"), object("effective"), Json::parse(pending.params, nullptr, false), &merged, &error)) {
+        failAction(pending.action, error, status::kInvalidArgument);
+        return;
+    }
+    // core replaces the whole override, so the whole object goes back; restart is what applies it.
+    const AsyncResult r = callCoreAsync(
+        kTopicConfigSet, dumpJson(Json{{"pluginType", kPluginType}, {"override", merged}, {"restart", true}}), mqttIdentity());
+    if (!r.accepted) {
+        failAction(pending.action, "Core refused to save the settings: " + (r.error ? r.error->message : std::string("no reason")), status::kFailure);
+        return;
+    }
+    Pending next{PendingKind::ConfigSet};
+    next.action = pending.action;
+    m_pending[r.cmdId] = std::move(next);
+}
+
+void MqttTransport::settleActions()
+{
+    for (const auto &[id, pending] : m_pending) {
+        if (pending.action == 0) continue;
+        if (pending.kind == PendingKind::ConfigSet) completeAction(pending.action, makeActionResultText("Saved; the transport restarts."));
+        else failAction(pending.action, "The transport stopped before core answered", status::kFailure);
+    }
+    finishSweepAction("The transport stopped during the sweep", 0);
 }
 
 // --- commands from the broker -----------------------------------------------------

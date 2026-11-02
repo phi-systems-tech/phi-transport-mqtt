@@ -192,6 +192,13 @@ public:
     std::map<int, Json> rollbackFor;      // ... with this rollbackValue (none: omitted)
     bool holdDevices = false;             // the devices list is answered when release() is called
     bool credentialsAnswered = false;
+    // core's transport config: what cmd.transport.config.get answers and cmd.transport.config.set stores
+    Json configBase = Json::object();
+    Json configOverride = Json::object();
+    Json configEffective = Json::object();
+    bool failConfigSet = false;   // config.set answers a failure
+    bool stopOnConfigSet = false; // config.set restarts the transport before it answers
+    std::map<CmdId, Json> completed; // what the plugin answered to an action
 
     void log(const LogEntry &entry) override { logs.push_back(entry); }
 
@@ -236,6 +243,19 @@ public:
             // Somebody else's account only: the endpoint's own is not minted yet.
             reply["credentials"] = Json::array({{{"backend", "voice@satellites"}, {"username", "voice_satellites"}, {"password", "x"}}});
             credentialsAnswered = true;
+        } else if (call.topic == "cmd.transport.config.get") {
+            reply = {{"pluginType", "mqtt"}, {"base", configBase}, {"override", configOverride}, {"effective", configEffective}};
+        } else if (call.topic == "cmd.transport.config.set") {
+            if (failConfigSet) {
+                reply = {{"status", 1}, {"statusName", "Failure"}, {"error", {{"message", "override not writable"}}}};
+            } else {
+                configOverride = call.payload["override"];
+                reply = {{"pluginType", "mqtt"}, {"restarted", true}};
+                if (stopOnConfigSet) {
+                    m_loop.post([this]() { plugin->stop(); });
+                    return accepted(id);
+                }
+            }
         } else if (call.topic == "cmd.channel.invoke") {
             const int channelId = call.payload.value("channelId", 0);
             reply = {{"cmd", call.topic}, {"status", 0}, {"statusName", "Success"}};
@@ -250,7 +270,7 @@ public:
         return accepted(id);
     }
 
-    void completeAction(CmdId, std::string_view) override {}
+    void completeAction(CmdId id, std::string_view result) override { completed[id] = Json::parse(result, nullptr, false); }
 
     void release()
     {
@@ -364,7 +384,7 @@ void runEndpoint(Loop &loop, int port)
     CHECK(spy.last("phi/bridge/info"));
     if (const Heard *info = spy.last("phi/bridge/info")) {
         const Json j = Json::parse(info->payload);
-        CHECK(j["instance"] == "Test House" && j["tenant"] == "1" && j["version"] == "0.2.0" && j["sdk"] == kTransportApiVersion);
+        CHECK(j["instance"] == "Test House" && j["tenant"] == "1" && j["version"] == "0.3.0" && j["sdk"] == kTransportApiVersion);
     }
     if (const Heard *devices = spy.last("phi/bridge/devices")) {
         const Json j = Json::parse(devices->payload);
@@ -605,7 +625,7 @@ void runDiscovery(Loop &loop, int port)
     {
         const Json j = parsed(ha.last(config("10")));
         CHECK(j["dev"]["ids"] == Json::array({"phi_" + box + "_10"}) && j["dev"]["name"] == "Kitchen light" && j["dev"]["sa"] == "Kitchen");
-        CHECK(j["o"]["name"] == "phi" && j["o"]["sw"] == "0.2.0");
+        CHECK(j["o"]["name"] == "phi" && j["o"]["sw"] == "0.3.0");
         CHECK(j["availability_mode"] == "all" && j["availability"].size() == 2);
         CHECK(j["availability"][0]["topic"] == "phid/bridge/state" && j["availability"][1]["topic"] == "phid/device/10/availability");
         CHECK(j["cmps"]["power"]["p"] == "light" && j["cmps"]["power"]["brightness_command_topic"] == "phid/device/10/brightness/set");
@@ -700,6 +720,172 @@ void runDiscovery(Loop &loop, int port)
     plugin->stop();
 }
 
+// The management card: summary, republish, sweep and settings against a core that keeps the override.
+void runManagement(Loop &loop, int port)
+{
+    Spy spy(loop, port, "spy-m", "phim/#");
+    Spy hand(loop, port, "hand-m", "");
+    CHECK(waitFor(loop, [&]() { return spy.connected() && hand.connected(); }));
+
+    FakeCore core(loop);
+    auto plugin = std::make_unique<phi::endpoint::MqttTransport>();
+    core.plugin = plugin.get();
+    TransportHost::attach(plugin.get(), &core, &loop);
+    const auto actionIds = [&]() {
+        std::vector<std::string> ids;
+        const Json d = Json::parse(plugin->describeManagement());
+        if (d.contains("actions"))
+            for (const Json &a : d["actions"]) ids.push_back(a["id"]);
+        return ids;
+    };
+    const auto summary = [&]() { return Json::parse(plugin->describeManagement()).value("summary", std::string()); };
+    CmdId nextAction = 9000;
+
+    // --- before start: a summary, no crash, no action taken --------------------------------------
+    CHECK(summary() == "not running");
+    CHECK(actionIds() == (std::vector<std::string>{"republish", "sweep", "settings"}));
+    CHECK(plugin->invokeAction(++nextAction, "republish", "{}"));
+    CHECK(core.completed[nextAction]["status"] == 1);
+    CHECK(!plugin->invokeAction(++nextAction, "nothing", "{}"));
+
+    // --- running: the broker, the account, the counts ------------------------------------------------
+    // Stored by hand: a user and password the broker takes without checking, so the keep rule is seen on the wire.
+    const Json running = {{"hosting", "sidecar"}, {"enabled", true}, {"baseTopic", "phim"}, {"excludeAdapters", Json::array({"tuya"})},
+                          {"broker", {{"host", "127.0.0.1"}, {"port", port}, {"username", "household"}, {"password", "stored-secret"}}},
+                          {"discovery", {{"homeAssistant", true}}}};
+    core.configEffective = running;
+    core.configOverride = {{"enabled", true}, {"future", {{"a", 1}}}, {"baseTopic", "phim"}, {"excludeAdapters", Json::array({"tuya"})},
+                           {"broker", running["broker"]}, {"discovery", {{"homeAssistant", true}}}};
+    std::string error;
+    CHECK(plugin->start(running.dump(), &error));
+    CHECK(waitFor(loop, [&]() { return spy.last("phim/bridge/devices") != nullptr; }));
+    CHECK(waitFor(loop, [&]() { return summary().find("on the broker 127.0.0.1:" + std::to_string(port)) == 0; }));
+    {
+        const std::string text = summary();
+        CHECK(text.find(" as household, 2 devices, ") != std::string::npos);
+        CHECK(text.find(" topics, Home Assistant discovery on") != std::string::npos);
+        CHECK(text.find("read-only") == std::string::npos);
+        const Json d = Json::parse(plugin->describeManagement());
+        CHECK(d["actions"].size() == 3);
+        CHECK(d["actions"][1]["id"] == "sweep" && d["actions"][1].contains("confirm") && !d["actions"][1].value("danger", false));
+        CHECK(d["actions"][2]["id"] == "settings" && d["actions"][2]["hasForm"] == true);
+        std::map<std::string, Json> defaults;
+        for (const Json &f : d["actions"][2]["form"]["fields"]) defaults[f["key"]] = f["default"];
+        CHECK(defaults.size() == 11);
+        CHECK(defaults["baseTopic"] == "phim" && defaults["useBroker"] == true && defaults["brokerHost"] == "127.0.0.1");
+        CHECK(defaults["brokerPort"] == port && defaults["brokerUsername"] == "household" && defaults["brokerPassword"] == "");
+        CHECK(defaults["homeAssistant"] == true && defaults["readOnly"] == false);
+    }
+    settle(loop, 2800); // the sweep every start runs, and the discovery
+
+    // --- republish: everything again, with the count --------------------------------------------------
+    {
+        const std::size_t before = spy.count("phim/device/10/power");
+        const CmdId id = ++nextAction;
+        CHECK(plugin->invokeAction(id, "republish", "{}"));
+        CHECK(core.completed.count(id) == 1 && core.completed[id]["status"] == 0);
+        const std::string text = core.completed[id].value("resultValue", std::string());
+        CHECK(text.size() > 19 && text.substr(text.size() - 19) == " topics republished");
+        CHECK(waitFor(loop, [&]() { return spy.count("phim/device/10/power") > before; }));
+        // The count is what the summary says it holds, plus the clears that were waiting (none).
+        const std::size_t n = std::stoul(text);
+        CHECK(n > 10);
+        CHECK(summary().find(std::to_string(n) + " topics") != std::string::npos);
+    }
+
+    // --- sweep: what is stale goes, a second one at the same time is refused ------------------------------
+    {
+        hand.publish("phim/device/99/power", "true", true);
+        settle(loop, 300);
+        const CmdId first = ++nextAction, second = ++nextAction;
+        CHECK(plugin->invokeAction(first, "sweep", "{}"));
+        CHECK(plugin->invokeAction(second, "sweep", "{}"));
+        CHECK(core.completed[second]["status"] == 5); // Busy
+        CHECK(waitFor(loop, [&]() { return core.completed.count(first) == 1; }, 6000));
+        CHECK(core.completed[first]["status"] == 0 && core.completed[first]["resultValue"] == "1 stale topic(s) swept");
+        CHECK(waitFor(loop, [&]() { return spy.last("phim/device/99/power") && spy.last("phim/device/99/power")->payload.empty(); }));
+        // Nothing left: zero is an answer too.
+        const CmdId again = ++nextAction;
+        CHECK(plugin->invokeAction(again, "sweep", "{}"));
+        CHECK(waitFor(loop, [&]() { return core.completed.count(again) == 1; }, 6000));
+        CHECK(core.completed[again]["resultValue"] == "0 stale topic(s) swept");
+    }
+
+    // --- settings: the override core receives -----------------------------------------------------------
+    core.calls.clear();
+    {
+        const CmdId id = ++nextAction;
+        // The password field comes back empty: the stored one stays.
+        const Json form = {{"homeAssistant", false}, {"discoveryPrefix", "homeassistant"}, {"readOnly", true}, {"baseTopic", "phim"},
+                           {"useBroker", true}, {"brokerHost", "127.0.0.1"}, {"brokerPort", port}, {"brokerUsername", "household"},
+                           {"brokerPassword", ""}, {"brokerTls", false}, {"brokerCaFile", ""}};
+        CHECK(plugin->invokeAction(id, "settings", form.dump()));
+        CHECK(waitFor(loop, [&]() { return core.completed.count(id) == 1; }));
+        CHECK(core.completed[id]["status"] == 0 && core.completed[id]["resultValue"] == "Saved; the transport restarts.");
+        const auto gets = core.callsTo("cmd.transport.config.get"), sets = core.callsTo("cmd.transport.config.set");
+        CHECK(gets.size() == 1 && gets[0].payload == (Json{{"pluginType", "mqtt"}}));
+        CHECK(sets.size() == 1);
+        if (sets.size() == 1) {
+            const Json &p = sets[0].payload;
+            CHECK(p["pluginType"] == "mqtt" && p["restart"] == true);
+            Json expected = {{"enabled", true}, {"future", {{"a", 1}}}, {"baseTopic", "phim"}, {"excludeAdapters", Json::array({"tuya"})},
+                             {"readOnly", true}, {"discovery", {{"homeAssistant", false}, {"prefix", "homeassistant"}}},
+                             {"broker", {{"host", "127.0.0.1"}, {"port", port}, {"username", "household"}, {"password", "stored-secret"}}}};
+            CHECK(p["override"] == expected);
+            if (p["override"] != expected) std::printf("  got: %s\n", p["override"].dump().c_str());
+        }
+        for (const FakeCore::Call &c : core.calls) CHECK(c.kind == CallerIdentity::Kind::TrustedLocal && c.clientId == "mqtt");
+    }
+
+    // A form core's parser would refuse never reaches core.set.
+    core.calls.clear();
+    {
+        const CmdId id = ++nextAction;
+        CHECK(plugin->invokeAction(id, "settings", Json{{"useBroker", true}, {"brokerHost", "127.0.0.1"}, {"brokerPort", 0}}.dump()));
+        CHECK(waitFor(loop, [&]() { return core.completed.count(id) == 1; }));
+        CHECK(core.completed[id]["status"] == 4 && core.completed[id]["error"]["message"].get<std::string>().find("port") != std::string::npos);
+        CHECK(core.callsTo("cmd.transport.config.set").empty());
+        const CmdId junk = ++nextAction;
+        CHECK(plugin->invokeAction(junk, "settings", "not json"));
+        CHECK(core.completed[junk]["status"] == 4);
+    }
+    // core's refusal is the action's error.
+    {
+        core.failConfigSet = true;
+        const CmdId id = ++nextAction;
+        CHECK(plugin->invokeAction(id, "settings", Json{{"readOnly", false}}.dump()));
+        CHECK(waitFor(loop, [&]() { return core.completed.count(id) == 1; }));
+        CHECK(core.completed[id]["status"] == 1 && core.completed[id]["error"]["message"].get<std::string>().find("override not writable") != std::string::npos);
+        core.failConfigSet = false;
+    }
+    // core restarts the transport before it answers: the save still ends as saved.
+    {
+        core.stopOnConfigSet = true;
+        const CmdId id = ++nextAction;
+        CHECK(plugin->invokeAction(id, "settings", Json{{"readOnly", false}}.dump()));
+        CHECK(waitFor(loop, [&]() { return core.completed.count(id) == 1; }));
+        CHECK(core.completed[id]["status"] == 0 && core.completed[id]["resultValue"] == "Saved; the transport restarts.");
+        core.stopOnConfigSet = false;
+    }
+
+    // --- after stop: a summary and an error, no crash ----------------------------------------------------------
+    CHECK(summary() == "not running");
+    CHECK(plugin->invokeAction(++nextAction, "sweep", "{}") && core.completed[nextAction]["status"] == 1);
+    CHECK(plugin->invokeAction(++nextAction, "settings", "{}") && core.completed[nextAction]["status"] == 1);
+
+    // --- without a broker account: it says what it waits for -----------------------------------------------------
+    CHECK(plugin->start("{\"hosting\":\"sidecar\"}", &error));
+    CHECK(waitFor(loop, [&]() { return core.credentialsAnswered; }));
+    CHECK(summary() == "waiting for the broker account");
+    CHECK(plugin->invokeAction(++nextAction, "republish", "{}") && core.completed[nextAction]["status"] == 1);
+    plugin->stop();
+
+    // --- a broker that is not there ---------------------------------------------------------------------------------
+    CHECK(plugin->start(Json{{"hosting", "sidecar"}, {"broker", {{"host", "127.0.0.1"}, {"port", freePort()}}}}.dump(), &error));
+    CHECK(waitFor(loop, [&]() { return summary().find("broker not reachable: ") == 0; }, 8000));
+    plugin->stop();
+}
+
 } // namespace
 
 int main()
@@ -730,6 +916,7 @@ int main()
         runEndpoint(loop, port);
         runReadOnlyAndAccount(loop, port);
         runDiscovery(loop, port);
+        runManagement(loop, port);
     }
 
     ::kill(broker, SIGTERM);

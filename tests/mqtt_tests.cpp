@@ -4,6 +4,7 @@
 
 #include "command.h"
 #include "config.h"
+#include "managementcard.h"
 #include "model.h"
 #include "payload.h"
 #include "retained.h"
@@ -11,6 +12,7 @@
 
 #include <cstdio>
 #include <iostream>
+#include <map>
 #include <set>
 
 using namespace phi::endpoint;
@@ -512,6 +514,147 @@ void testConfig()
         CHECK(!parseConfig(bad, &c, &error));
         CHECK(!error.empty());
     }
+
+    // core's own switch rides in the merged config and is never a reason to refuse it.
+    CHECK(parseConfig("{\"enabled\":false,\"somethingNew\":{\"a\":1}}", &c, &error));
+    CHECK(parseConfig("{\"enabled\":true,\"baseTopic\":\"phi\"}", &c, &error));
+}
+
+// --- the management card ---------------------------------------------------------
+
+void testManagementSummary()
+{
+    ManagementState s;
+    CHECK_EQ(managementSummary(s), std::string("not running"));
+    s.running = true;
+    CHECK_EQ(managementSummary(s), std::string("waiting for the broker account"));
+    s.foreignBroker = true;
+    CHECK_EQ(managementSummary(s), std::string("starting"));
+
+    s.hasLink = true;
+    s.host = "127.0.0.1";
+    s.port = 1883;
+    s.lastError = "connection refused";
+    CHECK_EQ(managementSummary(s), std::string("broker not reachable: connection refused"));
+    s.lastError.clear();
+    CHECK_EQ(managementSummary(s), std::string("broker not reachable: no answer yet"));
+
+    s.connected = true;
+    s.username = "mqtt_main";
+    s.devices = 76;
+    s.topics = 741;
+    CHECK_EQ(managementSummary(s), std::string("on the broker 127.0.0.1:1883 as mqtt_main, 76 devices, 741 topics, Home Assistant discovery on"));
+    s.homeAssistant = false;
+    s.readOnly = true;
+    s.username.clear();
+    s.devices = 1;
+    s.topics = 1;
+    CHECK_EQ(managementSummary(s), std::string("on the broker 127.0.0.1:1883, 1 device, 1 topic, Home Assistant discovery off, read-only"));
+}
+
+void testSettingsForm()
+{
+    Config c;
+    std::string error;
+    CHECK(parseConfig("{\"readOnly\":true,\"baseTopic\":\"home/phi\",\"broker\":{\"host\":\"b\",\"port\":9000,\"username\":\"u\",\"password\":\"secret\",\"tls\":{\"caFile\":\"/ca.pem\"}}}", &c, &error));
+    const Json form = settingsForm(c);
+    std::map<std::string, Json> byKey;
+    std::vector<std::string> order;
+    for (const Json &f : form["fields"]) {
+        byKey[f["key"]] = f;
+        order.push_back(f["key"]);
+    }
+    CHECK_EQ(order, (std::vector<std::string>{"homeAssistant", "discoveryPrefix", "readOnly", "baseTopic", "useBroker", "brokerHost",
+                                              "brokerPort", "brokerUsername", "brokerPassword", "brokerTls", "brokerCaFile"}));
+    CHECK_EQ(byKey["homeAssistant"]["type"], Json("boolean"));
+    CHECK_EQ(byKey["homeAssistant"]["default"], Json(true));
+    CHECK_EQ(byKey["discoveryPrefix"]["default"], Json("homeassistant"));
+    CHECK_EQ(byKey["readOnly"]["default"], Json(true));
+    CHECK_EQ(byKey["baseTopic"]["default"], Json("home/phi"));
+    CHECK_EQ(byKey["useBroker"]["default"], Json(true));
+    CHECK_EQ(byKey["brokerPort"]["type"], Json("integer"));
+    CHECK_EQ(byKey["brokerPort"]["default"], Json(9000));
+    CHECK_EQ(byKey["brokerPassword"]["type"], Json("password"));
+    CHECK_EQ(byKey["brokerPassword"]["default"], Json(""));      // the stored one is never sent to a browser
+    CHECK(form.dump().find("secret") == std::string::npos);
+    CHECK_EQ(byKey["brokerTls"]["default"], Json(true));
+    CHECK_EQ(byKey["brokerCaFile"]["default"], Json("/ca.pem"));
+
+    // Without a broker of its own the broker fields are blank, the port the usual one.
+    CHECK(parseConfig("{}", &c, &error));
+    const Json plain = settingsForm(c);
+    for (const Json &f : plain["fields"]) {
+        if (f["key"] == "useBroker") CHECK_EQ(f["default"], Json(false));
+        if (f["key"] == "brokerPort") CHECK_EQ(f["default"], Json(1883));
+        if (f["key"] == "brokerHost") CHECK_EQ(f["default"], Json(""));
+    }
+}
+
+void testSettingsMerge()
+{
+    const Json base = {{"hosting", "sidecar"}, {"baseTopic", "phi"}, {"readOnly", false}, {"discovery", {{"homeAssistant", true}, {"prefix", "homeassistant"}}}};
+    Json out;
+    std::string error;
+
+    // Only the keys the form owns change; core's keys and unknown ones stay in the override.
+    const Json override1 = {{"enabled", false}, {"stateDir", "/x"}, {"excludeAdapters", {"tuya"}}, {"future", {{"a", 1}}}};
+    Json effective1 = base;
+    effective1.merge_patch(override1);
+    CHECK(mergeSettings(override1, effective1, {{"homeAssistant", false}, {"readOnly", true}, {"useBroker", false}}, &out, &error));
+    CHECK_EQ(out["enabled"], Json(false));
+    CHECK_EQ(out["stateDir"], Json("/x"));
+    CHECK_EQ(out["excludeAdapters"], (Json{"tuya"}));
+    CHECK_EQ(out["future"], (Json{{"a", 1}}));
+    CHECK_EQ(out["readOnly"], Json(true));
+    CHECK_EQ(out["discovery"]["homeAssistant"], Json(false));
+    CHECK_EQ(out["discovery"]["prefix"], Json("homeassistant"));
+    CHECK(!out.contains("broker") && !out.contains("hosting"));
+
+    // A foreign broker, typed in: port as text, the base topic free now.
+    CHECK(mergeSettings(Json::object(), base,
+                        {{"useBroker", true}, {"brokerHost", " 10.0.0.5 "}, {"brokerPort", "8883"}, {"brokerUsername", "ha"},
+                         {"brokerPassword", "pw"}, {"brokerTls", true}, {"brokerCaFile", "/ca.pem"}, {"baseTopic", "home/phi"}},
+                        &out, &error));
+    CHECK_EQ(out["broker"], (Json{{"host", "10.0.0.5"}, {"port", 8883}, {"username", "ha"}, {"password", "pw"}, {"tls", {{"caFile", "/ca.pem"}}}}));
+    CHECK_EQ(out["baseTopic"], Json("home/phi"));
+
+    // The password the form leaves empty is the stored one; the other keys of the block follow the form.
+    const Json stored = {{"baseTopic", "home/phi"}, {"broker", {{"host", "b"}, {"port", 1884}, {"username", "u"}, {"password", "keep"}, {"future", 1}}}};
+    Json effective2 = base;
+    effective2.merge_patch(stored);
+    CHECK(mergeSettings(stored, effective2, {{"useBroker", true}, {"brokerHost", "b2"}, {"brokerPort", 1885}, {"brokerUsername", ""}, {"brokerPassword", ""}, {"brokerTls", false}}, &out, &error));
+    CHECK_EQ(out["broker"], (Json{{"host", "b2"}, {"port", 1885}, {"password", "keep"}, {"future", 1}}));
+    // ... also when the block came from the base layer and the override has none yet.
+    Json effective3 = base;
+    effective3["broker"] = {{"host", "base"}, {"password", "fromBase"}};
+    effective3["baseTopic"] = "x";
+    CHECK(mergeSettings(Json::object(), effective3, {{"brokerPassword", ""}, {"brokerHost", "base"}}, &out, &error));
+    CHECK_EQ(out["broker"]["password"], Json("fromBase"));
+    // A typed password replaces it.
+    CHECK(mergeSettings(stored, effective2, {{"useBroker", true}, {"brokerPassword", "new"}}, &out, &error));
+    CHECK_EQ(out["broker"]["password"], Json("new"));
+    CHECK_EQ(out["broker"]["host"], Json("b"));
+
+    // The broker switched off: the block goes, the base topic must be phi again.
+    CHECK(!mergeSettings(stored, effective2, {{"useBroker", false}}, &out, &error));
+    CHECK(error.find("phi") != std::string::npos);
+    CHECK(mergeSettings(stored, effective2, {{"useBroker", false}, {"baseTopic", "phi"}}, &out, &error));
+    CHECK(!out.contains("broker"));
+    CHECK_EQ(out["baseTopic"], Json("phi"));
+
+    // Refusals, each with a sentence.
+    const Json on = {{"useBroker", true}, {"brokerHost", "b"}};
+    for (const Json &bad : {Json{{"useBroker", true}, {"brokerHost", "  "}}, Json{{"useBroker", true}, {"brokerHost", ""}},
+                            Json{{"useBroker", true}, {"brokerHost", "b"}, {"brokerPort", 0}},
+                            Json{{"useBroker", true}, {"brokerHost", "b"}, {"brokerPort", 70000}},
+                            Json{{"useBroker", true}, {"brokerHost", "b"}, {"brokerPort", "http"}},
+                            Json{{"baseTopic", "a/#"}}, Json{{"baseTopic", ""}}, Json{{"discoveryPrefix", "a//b"}},
+                            Json{{"baseTopic", "mine"}}, Json(3)}) {
+        error.clear();
+        CHECK(!mergeSettings(Json::object(), base, bad, &out, &error));
+        CHECK(!error.empty());
+    }
+    CHECK(mergeSettings(Json::object(), base, on, &out, &error));
 }
 
 // --- the model -----------------------------------------------------------------
@@ -633,6 +776,9 @@ int main()
     testCommandParsing();
     testTopics();
     testConfig();
+    testManagementSummary();
+    testSettingsForm();
+    testSettingsMerge();
     testModelEvents();
     testRollback();
     testRetainedLedger();
