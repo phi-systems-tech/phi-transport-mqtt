@@ -223,7 +223,7 @@ a `RemoteKey` that only reports (no event is published for it).
   "baseTopic": "phi",
   "readOnly": false,
   "excludeAdapters": [],
-  "discovery": { "homeAssistant": false, "prefix": "homeassistant" }
+  "discovery": { "homeAssistant": true, "prefix": "homeassistant" }
 }
 ```
 
@@ -235,7 +235,7 @@ a `RemoteKey` that only reports (no event is published for it).
 | `readOnly` | `false` | `true`: no `set` subscription, so no command can arrive (Home Assistant's status topic is still heard) |
 | `excludeAdapters` | `[]` | adapter plugin types (`"tuya"`) or adapter ids (`7`) whose devices are never published |
 | `broker` | absent | `{host, port, username, password, tls:{caFile}}`: a foreign broker. Used instead of the hostd account. `port` defaults to 1883, or 8883 when `tls` is present; a `tls` block turns TLS on (the chain is always verified, `caFile` names the authority, empty = the system store) |
-| `discovery` | absent | `{homeAssistant: false, prefix: "homeassistant"}`: `homeAssistant: true` publishes the Home Assistant discovery, `prefix` is Home Assistant's discovery prefix. With it off nothing is published and an earlier run's configs are cleared at start |
+| `discovery` | absent | `{homeAssistant: true, prefix: "homeassistant"}`: `homeAssistant: false` switches the Home Assistant discovery off, `prefix` is Home Assistant's discovery prefix. With it off nothing is published and an earlier run's configs are cleared at start |
 
 ### The broker account (box broker)
 

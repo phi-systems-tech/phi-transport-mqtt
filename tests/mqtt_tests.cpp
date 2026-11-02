@@ -484,7 +484,7 @@ void testConfig()
     Config c;
     std::string error;
     CHECK(parseConfig("{\"hosting\":\"sidecar\",\"stateDir\":\"/var/lib/phi/@1/transports/mqtt/state\",\"baseTopic\":\"phi\",\"readOnly\":false,\"excludeAdapters\":[]}", &c, &error));
-    CHECK(c.baseTopic == "phi" && !c.readOnly && c.excludeAdapters.empty() && !c.broker && !c.discovery.homeAssistant);
+    CHECK(c.baseTopic == "phi" && !c.readOnly && c.excludeAdapters.empty() && !c.broker && c.discovery.homeAssistant);
     CHECK(c.discovery.prefix == "homeassistant");
 
     CHECK(parseConfig("{}", &c, &error) && c.baseTopic == "phi");

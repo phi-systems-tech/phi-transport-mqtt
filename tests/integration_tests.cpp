@@ -298,10 +298,12 @@ private:
     CmdId heldId = 0;
 };
 
+// The mirror scenarios: discovery off, so what they retain on the shared broker is the
+// endpoint's own tree only and the discovery scenario finds nothing of theirs.
 std::string configFor(int port, const std::string &base, bool readOnly)
 {
     return Json{{"hosting", "sidecar"}, {"baseTopic", base}, {"readOnly", readOnly}, {"excludeAdapters", Json::array({"tuya"})},
-                {"broker", {{"host", "127.0.0.1"}, {"port", port}}}}.dump();
+                {"broker", {{"host", "127.0.0.1"}, {"port", port}}}, {"discovery", {{"homeAssistant", false}}}}.dump();
 }
 
 std::string configWithDiscovery(int port, const std::string &base, bool readOnly, bool homeAssistant)

@@ -20,7 +20,7 @@ struct BrokerOverride {
 
 // Parsed now, used by the Home Assistant discovery step.
 struct DiscoveryConfig {
-    bool homeAssistant = false;
+    bool homeAssistant = true;
     std::string prefix = "homeassistant";
 };
 

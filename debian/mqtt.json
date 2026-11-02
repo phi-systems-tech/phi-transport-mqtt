@@ -4,5 +4,5 @@
   "baseTopic": "phi",
   "readOnly": false,
   "excludeAdapters": [],
-  "discovery": { "homeAssistant": false, "prefix": "homeassistant" }
+  "discovery": { "homeAssistant": true, "prefix": "homeassistant" }
 }
