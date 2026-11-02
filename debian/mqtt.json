@@ -3,5 +3,6 @@
   "stateDir": "/var/lib/phi/@1/transports/mqtt/state",
   "baseTopic": "phi",
   "readOnly": false,
-  "excludeAdapters": []
+  "excludeAdapters": [],
+  "discovery": { "homeAssistant": false, "prefix": "homeassistant" }
 }

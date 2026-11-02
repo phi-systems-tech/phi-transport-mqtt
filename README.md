@@ -11,8 +11,9 @@ This is the **northbound** side. It is not the device-side broker traffic
 (`zigbee2mqtt/...`, the voice satellites, ThinQ): that stays on the adapter
 plane and is untouched by this transport.
 
-Status: phase (a), the model mirror and the commands. Home Assistant discovery
-follows (see the end of this file).
+Status: phases (a) and (b): the model mirror, the commands, and Home Assistant
+device-based discovery (see "Home Assistant" below). Media players, cameras and
+device effects are phase (d).
 
 ## Supported Protocols / Endpoints
 
@@ -34,16 +35,20 @@ broker lets in: on the box `phi-mosquitto` listens on loopback only.
 - Towards core the caller identity is `TrustedLocal`, client id `mqtt`: the broker's
   ACL is the credential. That is honest while the broker's writers are the box's
   own accounts or a broker the household configured itself. `readOnly: true`
-  subscribes to nothing, so no command can arrive.
+  drops every `set` subscription, so no command can arrive (it still listens to Home
+  Assistant's status topic, which is not a command).
 - The endpoint never publishes a retained command, and ignores one it is handed
   (a retained `set` is replayed at every subscribe and would switch the device
   again each time).
 
 ## Known Issues
 
-- A topic retained by an earlier run for a device that has since gone, or that a new
-  `excludeAdapters` entry now leaves out, is cleared only while the transport is
-  running when it happens; it does not sweep the broker at start.
+- The start sweep clears everything retained under `baseTopic`/ that the transport does
+  not own. Two phi boxes on one foreign broker therefore need two different `baseTopic`
+  values, or each clears the other's topics at every start.
+- A clean `stop()` flushes "offline" before it disconnects; a backlog of more than the
+  socket buffer queued just before (a very large house replayed right before a stop) could
+  still keep it from going out. The will covers a connection that dies.
 - Scene removal has no core event; the scene list is read again every 60 s.
 
 ## License
@@ -132,6 +137,81 @@ A command that core refuses (or fails) is logged at Warn with the reason and the
 is published again, from the rollback value when core names one, else the last value
 known, so a consumer sees the truth even where the retained topic already said it.
 
+### Home Assistant
+
+`discovery.homeAssistant: true` publishes Home Assistant's device-based discovery (format of
+Home Assistant 2024.11): one retained config per phi device,
+`<prefix>/device/phi_<box>_<deviceId>/config`, and one for all scenes,
+`<prefix>/device/phi_<box>_scenes/config`. openHAB 5 reads the same topics through its Home
+Assistant binding. The per-entity discovery format is never published.
+
+```json
+"discovery": { "homeAssistant": true, "prefix": "homeassistant" }
+```
+
+**Ids.** `<box>` is the machine's hostname (lowercase, anything outside `[a-z0-9_-]` turned
+into `_`) + `_` + the tenant, e.g. `pi5_1`: the hostname is stable where the instance label
+is free text. The device's object id and `dev.ids[0]` are `phi_<box>_<deviceId>`, a
+component's `unique_id` is `phi_<box>_<deviceId>_<slug>`, a scene's
+`phi_<box>_scene_<sceneId>`. Core ids and slugs do not change on a rename, so neither does
+anything Home Assistant has stored.
+
+**What a payload carries.** `dev` (`ids`, `name`, `mf`, `mdl`, `sw` from the device's
+manufacturer, model and firmware, `sa` the room's name), `o` (`{name: "phi", sw, url}`),
+`availability` with **both** `phi/bridge/state` and `phi/device/<id>/availability`
+(`availability_mode: "all"`, `online` / `offline`: a dead transport leaves its retained
+states standing, an unreachable adapter leaves the bridge up), and `cmps`, one component per
+channel that maps (key = the channel's slug). The scenes device is available on the bridge
+alone. A payload never depends on a channel's value, so a state change publishes no
+discovery. A device with no component Home Assistant could show gets no payload (and one
+published earlier is cleared); a device of an excluded adapter gets none.
+
+**Channel -> component.**
+
+| phi | Home Assistant | notes |
+| --- | --- | --- |
+| a `Light` device's `PowerOnOff` (writable Bool) with `Brightness`, `ColorRGB`, `ColorTemperature` | one `light` (default schema) | state and command topic per attribute; `brightness_scale` 100; colour `{"r","g","b"}` 0..1 on the wire, converted by `rgb_value_template` / `rgb_command_template`; colour temperature in mired, `min_kelvin` / `max_kelvin` from the channel's range |
+| `PowerOnOff` elsewhere, other writable Bool | `switch` | `device_class: outlet` for a `Plug`; the first one is the device's main entity (`name: null`) |
+| `Brightness`, `Volume`, any other writable Int / Float | `number` | `min` / `max` / `step` from the channel; no range: 0..100 for brightness and volume, else a wide `box` |
+| `Contact`, `Motion`, `Tamper`, `Presence` (read-only Bool) | `binary_sensor` | `opening` / `motion` / `tamper` / `presence`; phi `Contact` true = open = ON. Any other read-only Bool: `binary_sensor` without a class |
+| `Temperature`, `Humidity`, `Illuminance`, `Battery`, `CO2`, `Power`, `Voltage`, `Current`, `Energy`, `LinkQuality`, `SignalStrength` | `sensor` | `device_class`, the class's unit, `state_class` `measurement` (`total_increasing` for `Energy`); `Battery`, `LinkQuality`, `SignalStrength` are `diagnostic` |
+| any other read-only Int / Float | `sensor` | the channel's unit, `measurement` |
+| String, enum and flags state | `sensor` (string) | JSON-quoted on the topic, so `value_template: "{{ value_json }}"`; flags are joined. No `device_class: enum`: see below |
+| `ButtonEvent` | `event` | `device_class: button`, `event_types` = the snake_case names of `ButtonEventCode` (`initial_press` ... `repeat`) |
+| `DoorbellRing` | `event` | `device_class: doorbell`, `event_types: ["ring"]`; the event payload's `event_type` is `ring` whatever code came |
+| writable Bool, `Momentary` (`RemoteKey`) | `button` | `command_topic` = the channel's set topic, `payload_press: "true"` |
+| `Message` (writable) | `notify` | `command_topic` = the channel's set topic; the text is the message, the command parser wraps a bare string as `{"body": text}` |
+| writable String (`Announcement`) | `text` | |
+| a scene | `scene` | `phi/scene/<id>/set`, `payload_on: "ON"`; all on the device "phi scenes" |
+
+Enum sensors are plain string sensors: the state topic carries core's name of the value
+(`High`), the channel's `enumMap` holds the adapter's own tokens (`high`), and Home Assistant
+turns a state outside a `device_class: enum` sensor's `options` into an error.
+
+**Republish.** On every broker connect everything is published again (the ledger). When
+Home Assistant says `online` on `<prefix>/status` (not retained), every discovery payload is
+published again after a random 0-5 s. A device whose channel set changed has its payload
+republished; a component that vanished is first sent as `{"p": "<platform>"}` alone, which
+is what makes Home Assistant remove the entity, and the payload without it follows at once.
+Home Assistant mode off, a removed device or an excluded adapter: an empty retained payload
+on the config topic.
+
+**The sweep.** On the first connect after start, a second short-lived connection
+(`phi-transport-mqtt-sweep`) subscribes to `<baseTopic>/#` and `<prefix>/device/+/config`,
+collects every message that arrives with the retained flag for 2 s, and the transport clears
+(empty retained publish) every such topic it does not own: everything under `baseTopic`, and
+the configs named `phi_<box>_...` of this box. Another box's configs and other ecosystems'
+devices are never touched. One Info line, "swept N stale topic(s)", when N > 0. A separate
+connection because the client cannot unsubscribe and an overlapping filter on the command
+link would deliver a command twice.
+
+**Not mapped yet** (phase (d)): the media set (`PlayPause`, `Mute`, `HdmiInput`, `Media*`),
+the camera set (`VideoStream`, `Snapshot`, `PtzMove`, `PtzPreset`, `NightVision`,
+`ObjectDetected`), `SceneTrigger`, a momentary enum (a chime pattern needs a value), writable
+enums (no `select`: same naming reason as the enum sensor), colour and composite values
+outside a light, the "last message" sensor beside `notify` (a Message has no state topic), and
+a `RemoteKey` that only reports (no event is published for it).
+
 ### Configuration
 
 `/etc/phi/@1/transports/mqtt.json`, merged with the tenant's override by core:
@@ -142,7 +222,8 @@ known, so a consumer sees the truth even where the retained topic already said i
   "stateDir": "/var/lib/phi/@1/transports/mqtt/state",
   "baseTopic": "phi",
   "readOnly": false,
-  "excludeAdapters": []
+  "excludeAdapters": [],
+  "discovery": { "homeAssistant": false, "prefix": "homeassistant" }
 }
 ```
 
@@ -151,10 +232,10 @@ known, so a consumer sees the truth even where the retained topic already said i
 | `hosting` | | core's key: `sidecar` runs the plugin in `phi-transport-host` |
 | `stateDir` | `/var/lib/phi/@1/transports/mqtt/state` | reserved; the transport keeps no state of its own yet |
 | `baseTopic` | `phi` | the topic prefix. On the box it must stay `phi`: the broker account is granted `phi/#` and `homeassistant/#` only. With a `broker{}` block it may be anything valid (`home/phi`) |
-| `readOnly` | `false` | `true`: subscribe to nothing, so no command can arrive |
+| `readOnly` | `false` | `true`: no `set` subscription, so no command can arrive (Home Assistant's status topic is still heard) |
 | `excludeAdapters` | `[]` | adapter plugin types (`"tuya"`) or adapter ids (`7`) whose devices are never published |
 | `broker` | absent | `{host, port, username, password, tls:{caFile}}`: a foreign broker. Used instead of the hostd account. `port` defaults to 1883, or 8883 when `tls` is present; a `tls` block turns TLS on (the chain is always verified, `caFile` names the authority, empty = the system store) |
-| `discovery` | absent | `{homeAssistant: false, prefix: "homeassistant"}`: parsed and kept; used by phase (b) |
+| `discovery` | absent | `{homeAssistant: false, prefix: "homeassistant"}`: `homeAssistant: true` publishes the Home Assistant discovery, `prefix` is Home Assistant's discovery prefix. With it off nothing is published and an earlier run's configs are cleared at start |
 
 ### The broker account (box broker)
 
@@ -210,6 +291,8 @@ With a foreign broker use the account from the `broker{}` block.
   (`topics.*`), the payloads (`payload.*`), the command parser (`command.*`) and the ledger
   of retained topics (`retained.*`) - all without broker or core - plus the broker link
   (`broker.*`) and the transport (`mqtttransport.*`). The module is `plugin.cpp` alone.
+  `discovery.*` maps the model to the Home Assistant payloads (pure functions), `sweep.*` is
+  the start-up look at the broker's retained topics.
 
 ### Build
 
@@ -222,9 +305,14 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
+- `mqtt_discovery_tests`: the Home Assistant payloads against the golden files in
+  `tests/golden/` (compared after parsing; `PHI_UPDATE_GOLDEN=1` rewrites them, read the diff),
+  no-component and excluded devices, removal, the two-step component removal, the ids.
 - `mqtt_tests`: slugs, payload shapes per data type, state versus event, the device JSON,
   command parsing, the topic parser, the config, the model's events, the ledger.
-- `mqtt_integration_tests`: the plugin against a mosquitto on a free port with a fake core.
+- `mqtt_integration_tests`: the plugin against a mosquitto on a free port with a fake core,
+  including the discovery, the sweep (a stale topic pre-seeded), the status republish and
+  the retained `offline` after a clean stop.
 
 ### Installation
 
@@ -236,11 +324,3 @@ phi-mosquitto` (the broker may be another machine's).
 ### Issue Tracker
 
 `https://github.com/phi-systems-tech/phi-transport-mqtt/issues`
-
-## Phase (b): Home Assistant discovery follows
-
-Device-based Home Assistant discovery (`homeassistant/device/phi_<instance>_<id>/config`,
-retained, cleared on removal, republished when `homeassistant/status` says `online`) is the
-next step. The `discovery` config block is already parsed, the broker account already carries
-`homeassistant/#`, and the model (`model.h`) and the ledger (`retained.h`) are what a
-`discovery.cpp` builds on without reshaping anything.
